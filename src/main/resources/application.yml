@@ -1,0 +1,54 @@
+server:
+  port: 8443
+  ssl:
+    enabled: true
+    key-store: classpath:keystore.p12
+    key-store-password: changeit
+    key-store-type: PKCS12
+    key-alias: colligendis
+  http2:
+    enabled: true
+
+spring:
+  application:
+    name: ColligendisServerReact
+  
+  neo4j:
+    uri: bolt://localhost:7687
+    authentication:
+      username: neo4j
+      password: password
+  
+  security:
+    user:
+      name: admin
+      password: admin
+
+jwt:
+  secret: YourSuperSecretKeyForJWTTokenGenerationChangeThisInProduction
+  expiration: 3600000
+  refresh-expiration: 86400000
+
+logging:
+  level:
+    root: WARN
+    "[com.colligendis]": INFO
+    "[org.springframework.security]": WARN
+    "[org.springframework.web]": WARN
+    # "[org.springframework.data.neo4j]": DEBUG
+    "[org.neo4j]": WARN
+  pattern:
+    console: "%clr(%d{yyyy-MM-dd HH:mm:ss.SSS}){faint} %clr(%5p) %clr(---){faint} %clr(%-30.30logger{1}){cyan} %clr(.%-20.20M){blue} %line %clr(:){faint} %clr(%msg) %clr(%n%wEx)"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} %5p ${PID:- } --- [%t] %-20.20c.%-20.20M : %m%n%wEx"
+  file:
+    name: logs/application.log
+  logback:
+    rollingpolicy:
+      max-file-size: 10MB
+      max-history: 30
+      file-name-pattern: logs/application.log.%d{yyyy-MM-dd}.%i.gz
+
+performance:
+  monitoring:
+    enabled: true
+    threshold-ms: 10

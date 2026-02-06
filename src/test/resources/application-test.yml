@@ -1,0 +1,16 @@
+spring:
+  neo4j:
+    uri: bolt://localhost:7687
+    authentication:
+      username: neo4j
+      password: password
+  security:
+    user:
+      name: testuser
+      password: testpass
+
+jwt:
+  secret: testSecretKeyForJWTThatIsLongEnoughToMeetTheRequirementsOfHS512Algorithm
+  expiration: 86400000
+  refresh-expiration: 604800000
+
