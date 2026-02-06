@@ -14,17 +14,14 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import com.colligendis.server.database.ColligendisUser;
 import com.colligendis.server.database.N4JUtil;
-import com.colligendis.server.database.exception.DatabaseException;
 import com.colligendis.server.database.exception.NotFoundError;
 import com.colligendis.server.database.numista.service.CatalogueService;
 import com.colligendis.server.database.numista.service.NTypeService;
 import com.colligendis.server.parser.PauseLock;
 import com.google.gson.Gson;
-import com.colligendis.server.database.numista.model.Catalogue;
 import com.colligendis.server.database.numista.model.CatalogueReference;
 import com.colligendis.server.database.numista.service.CatalogueReferenceService;
 import lombok.extern.slf4j.Slf4j;
@@ -63,8 +60,6 @@ public class ReferenceNumberParser {
 		}
 		return nTypeService;
 	}
-
-	private Map<String, PauseLock> pauseLockMap = new HashMap<>();
 
 	public Function<NumistaPage, Mono<NumistaPage>> parse = page -> Mono.defer(() -> parseReferenceNumber(page));
 
