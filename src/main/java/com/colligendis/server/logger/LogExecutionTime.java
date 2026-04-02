@@ -1,4 +1,4 @@
-package com.colligendis.server.aspect;
+package com.colligendis.server.logger;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;

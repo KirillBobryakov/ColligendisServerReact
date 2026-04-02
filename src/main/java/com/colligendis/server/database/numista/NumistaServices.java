@@ -16,9 +16,14 @@ import com.colligendis.server.database.numista.service.DenominationService;
 import com.colligendis.server.database.numista.service.IssuerService;
 import com.colligendis.server.database.numista.service.IssuingEntityService;
 import com.colligendis.server.database.numista.service.NTypeService;
-import com.colligendis.server.database.numista.service.RulerGroupService;
-import com.colligendis.server.database.numista.service.RulerService;
+import com.colligendis.server.database.numista.service.RulingAuthorityGroupService;
+import com.colligendis.server.database.numista.service.RulingAuthorityService;
 import com.colligendis.server.database.numista.service.SubjectService;
+import com.colligendis.server.database.numista.service.techdata.CompositionService;
+import com.colligendis.server.database.numista.service.techdata.CompositionTypeService;
+import com.colligendis.server.database.numista.service.techdata.MetalService;
+import com.colligendis.server.database.numista.service.techdata.ShapeService;
+import com.colligendis.server.database.numista.service.techdata.TechniqueService;
 
 @Service
 public class NumistaServices {
@@ -29,8 +34,8 @@ public class NumistaServices {
 	public final SectionService sectionService;
 	public final SubjectService subjectService;
 	public final CountryService countryService;
-	public final RulerService rulerService;
-	public final RulerGroupService rulerGroupService;
+	public final RulingAuthorityService rulingAuthorityService;
+	public final RulingAuthorityGroupService rulingAuthorityGroupService;
 	public final CurrencyService currencyService;
 	public final IssuingEntityService issuingEntityService;
 	public final DenominationService denominationService;
@@ -38,25 +43,33 @@ public class NumistaServices {
 	public final SeriesService seriesService;
 	public final CatalogueService catalogueService;
 	public final CatalogueReferenceService catalogueReferenceService;
+	public final CompositionService compositionService;
+	public final CompositionTypeService compositionTypeService;
+	public final MetalService metalService;
+	public final ShapeService shapeService;
+	public final TechniqueService techniqueService;
 	public final AuthorService authorService;
 	public final ColligendisUserService colligendisUserService;
 
 	private NumistaServices(NTypeService nTypeService, CollectibleTypeService collectibleTypeService,
 			IssuerService issuerService, SectionService sectionService, SubjectService subjectService,
-			CountryService countryService, RulerService rulerService,
-			RulerGroupService rulerGroupService, CurrencyService currencyService,
+			CountryService countryService, RulingAuthorityService rulingAuthorityService,
+			RulingAuthorityGroupService rulingAuthorityGroupService, CurrencyService currencyService,
 			IssuingEntityService issuingEntityService, DenominationService denominationService,
 			CommemoratedEventService commemoratedEventService, SeriesService seriesService,
 			CatalogueService catalogueService, CatalogueReferenceService catalogueReferenceService,
-			AuthorService authorService, ColligendisUserService colligendisUserService) {
+			CompositionService compositionService, CompositionTypeService compositionTypeService,
+			MetalService metalService, ShapeService shapeService, TechniqueService techniqueService,
+			AuthorService authorService,
+			ColligendisUserService colligendisUserService) {
 		this.nTypeService = nTypeService;
 		this.collectibleTypeService = collectibleTypeService;
 		this.issuerService = issuerService;
 		this.sectionService = sectionService;
 		this.subjectService = subjectService;
 		this.countryService = countryService;
-		this.rulerService = rulerService;
-		this.rulerGroupService = rulerGroupService;
+		this.rulingAuthorityService = rulingAuthorityService;
+		this.rulingAuthorityGroupService = rulingAuthorityGroupService;
 		this.currencyService = currencyService;
 		this.issuingEntityService = issuingEntityService;
 		this.denominationService = denominationService;
@@ -64,6 +77,11 @@ public class NumistaServices {
 		this.seriesService = seriesService;
 		this.catalogueService = catalogueService;
 		this.catalogueReferenceService = catalogueReferenceService;
+		this.compositionService = compositionService;
+		this.compositionTypeService = compositionTypeService;
+		this.metalService = metalService;
+		this.shapeService = shapeService;
+		this.techniqueService = techniqueService;
 		this.authorService = authorService;
 		this.colligendisUserService = colligendisUserService;
 	}

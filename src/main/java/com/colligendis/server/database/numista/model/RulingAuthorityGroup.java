@@ -17,11 +17,11 @@ import lombok.NoArgsConstructor;
 @EqualsAndHashCode(callSuper = false)
 @AllArgsConstructor
 @NoArgsConstructor
-public class RulerGroup extends AbstractNode {
+public class RulingAuthorityGroup extends AbstractNode {
 
-    public static final String LABEL = "RULER_GROUP";
+	public static final String LABEL = "RULING_AUTHORITY_GROUP";
 
-    private String nid;
-    private String name;
+	private String nid;
+	private String name;
 
 }

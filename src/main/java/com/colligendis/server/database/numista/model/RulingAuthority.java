@@ -57,49 +57,49 @@ import lombok.NoArgsConstructor;
 @Data
 @EqualsAndHashCode(callSuper = false)
 @NoArgsConstructor
-public class Ruler extends AbstractNode {
-    public static final String LABEL = "RULER";
+public class RulingAuthority extends AbstractNode {
+	public static final String LABEL = "RULING_AUTHORITY";
 
-    public static final List<String> RULERS = Arrays.asList(
-            "Period", "Archduke", "Ban", "Bishop", "Caesar", "Camerlengo", "Doge", "Duchess", "Duke", "Emir", "Emperor",
-            "Empress",
-            "Grandmaster", "Grand duchess", "Grand duke", "Grand Prince",
-            "Khan", "King", "Landgrave", "Lord", "Margrave", "Margravine", "Master",
-            "Pope", "President", "Prime minister", "Prince", "Prince-archbishop", "Prince elector", "Prince-bishop",
-            "Queen", "Regent", "Ruling authority", "Shah", "Sultan", "Tsar", "Voivode");
+	public static final List<String> RULERS = Arrays.asList(
+			"Period", "Archduke", "Ban", "Bishop", "Caesar", "Camerlengo", "Doge", "Duchess", "Duke", "Emir", "Emperor",
+			"Empress",
+			"Grandmaster", "Grand duchess", "Grand duke", "Grand Prince",
+			"Khan", "King", "Landgrave", "Lord", "Margrave", "Margravine", "Master",
+			"Pope", "President", "Prime minister", "Prince", "Prince-archbishop", "Prince elector", "Prince-bishop",
+			"Queen", "Regent", "Ruling authority", "Shah", "Sultan", "Tsar", "Voivode");
 
-    private String nid;
-    private String name;
-    private String rulerType;
+	private String nid;
+	private String name;
+	private String rulerType;
 
-    public static final String RULES_WHEN_BEEN = "RULES_WHEN_BEEN";
-    private Issuer issuer;
+	public static final String RULES_WHEN_BEEN = "RULES_WHEN_BEEN";
+	private Issuer issuer;
 
-    public static final String GROUP_BY = "GROUP_BY";
-    private RulerGroup rulerGroup;
+	public static final String GROUP_BY = "GROUP_BY";
+	private RulingAuthorityGroup rulingAuthorityGroup;
 
-    public static final String RULES_FROM = "RULES_FROM";
-    private ArrayList<Year> rulesFromYears = new ArrayList<>();
+	public static final String RULES_FROM = "RULES_FROM";
+	private ArrayList<Year> rulesFromYears = new ArrayList<>();
 
-    public static final String RULES_TILL = "RULES_TILL";
-    private ArrayList<Year> rulesTillYears = new ArrayList<>();
+	public static final String RULES_TILL = "RULES_TILL";
+	private ArrayList<Year> rulesTillYears = new ArrayList<>();
 
-    // todo Ruling period and
-    // catalogue/get_rulers.php?country=yemen_nord&e=1
-    /*
-     * <optgroup label="Mutawakkilite Kingdom">
-     * <option value="5487">Yahya Muhammad Hamid ed-Din (1918-1948)</option>
-     * <option value="5488">Ahmad bin Yahya (1948-1962)</option>
-     * <option value="5502">Muhammad al-Badr (1962-1970)</option>
-     * </optgroup>
-     * <option value="5476">Yemen Arab Republic (1962-1990)</option>
-     */
+	// todo Ruling period and
+	// catalogue/get_rulers.php?country=yemen_nord&e=1
+	/*
+	 * <optgroup label="Mutawakkilite Kingdom">
+	 * <option value="5487">Yahya Muhammad Hamid ed-Din (1918-1948)</option>
+	 * <option value="5488">Ahmad bin Yahya (1948-1962)</option>
+	 * <option value="5502">Muhammad al-Badr (1962-1970)</option>
+	 * </optgroup>
+	 * <option value="5476">Yemen Arab Republic (1962-1990)</option>
+	 */
 
-    private Boolean isActual;
+	private Boolean isActual;
 
-    public Ruler(String nid, String name) {
-        this.nid = nid;
-        this.name = name;
-    }
+	public RulingAuthority(String nid, String name) {
+		this.nid = nid;
+		this.name = name;
+	}
 
 }

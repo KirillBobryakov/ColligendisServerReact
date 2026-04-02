@@ -47,24 +47,24 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class IssuingEntity extends AbstractNode {
 
-    public static final String LABEL = "ISSUING_ENTITY";
+	public static final String LABEL = "ISSUING_ENTITY";
 
-    private String numistaCode;
-    private String name;
+	private String nid;
+	private String name;
 
-    public static final String ISSUES_WHEN_BEEN = "ISSUES_WHEN_BEEN";
-    private Issuer issuer;
+	public static final String ISSUES_WHEN_BEEN = "ISSUES_WHEN_BEEN";
+	private Issuer issuer;
 
-    private Boolean isActual;
+	private Boolean isActual;
 
-    public IssuingEntity(String code, String name) {
-        this.numistaCode = code;
-        this.name = name;
-    }
+	public IssuingEntity(String nid, String name) {
+		this.nid = nid;
+		this.name = name;
+	}
 
-    // /catalogue/get_issuing_entities.php?country=freiburg-im-breisgau_notgeld&prefill=
-    // <option value="2271">City of Rastatt</option>
-    // <option value="4561">Stroebeck</option>
-    // <option value="4866">Vorschuss Verein Soldau</option>
+	// /catalogue/get_issuing_entities.php?country=freiburg-im-breisgau_notgeld&prefill=
+	// <option value="2271">City of Rastatt</option>
+	// <option value="4561">Stroebeck</option>
+	// <option value="4866">Vorschuss Verein Soldau</option>
 
 }

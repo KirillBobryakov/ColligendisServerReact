@@ -4,35 +4,66 @@ import org.springframework.stereotype.Service;
 
 import com.colligendis.server.database.AbstractService;
 import com.colligendis.server.database.ColligendisUser;
-import com.colligendis.server.database.exception.DatabaseException;
-import com.colligendis.server.database.exception.NotFoundError;
+import com.colligendis.server.database.ExecutionResult;
+import com.colligendis.server.database.ExecutionStatus;
 import com.colligendis.server.database.numista.model.Author;
-import com.colligendis.server.util.Either;
+import com.colligendis.server.logger.BaseLogger;
 
 import reactor.core.publisher.Mono;
 
 @Service
 public class AuthorService extends AbstractService {
 
-	public Mono<Either<DatabaseException, Author>> save(Author author, ColligendisUser user) {
-		return super.createNode(author, user, Author.class);
+	public Mono<ExecutionResult<Author>> create(Author author, Mono<ColligendisUser> colligendisUserMono,
+			BaseLogger baseLogger) {
+		return colligendisUserMono
+				.flatMap(colligendisUser -> super.createNode(author, colligendisUser, Author.class, baseLogger))
+				.flatMap(executionResult -> {
+					if (executionResult.getStatus().equals(ExecutionStatus.NODE_WAS_CREATED)) {
+						baseLogger.trace("Author was created: {}", executionResult.getNode());
+						return Mono.just(executionResult);
+					} else if (executionResult.getStatus().equals(ExecutionStatus.NODE_NOT_CREATED)) {
+						baseLogger.traceRed("Author was not created: {}", executionResult.getNode());
+						return Mono.just(executionResult);
+					} else {
+						baseLogger.traceRed("Failed to create Author: {}", executionResult.getStatus());
+						executionResult.logError(baseLogger);
+						return Mono.just(executionResult);
+					}
+				});
 	}
 
-	public Mono<Either<DatabaseException, Author>> findByCode(String code) {
-		return super.findNodeByUniquePropertyValue("code", code, Author.LABEL, Author.class);
+	public Mono<ExecutionResult<Author>> findByCode(String code, BaseLogger baseLogger) {
+		return super.findNodeByUniquePropertyValue("code", code, Author.LABEL, Author.class, baseLogger)
+				.flatMap(executionResult -> {
+					if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
+						return Mono.just(executionResult);
+					} else if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_NOT_FOUND)) {
+						baseLogger.traceRed("Author was not found: {}", executionResult.getNode());
+						return Mono.just(executionResult);
+					} else if (executionResult.getStatus().equals(ExecutionStatus.MORE_THAN_ONE_NODE_IS_FOUND)) {
+						baseLogger.traceRed("More than one Author was found: {}", executionResult.getNode());
+						return Mono.just(executionResult);
+					} else {
+						baseLogger.traceRed("Failed to find Author: {}", executionResult.getStatus());
+						executionResult.logError(baseLogger);
+						return Mono.just(executionResult);
+					}
+				});
 	}
 
-	public Mono<Either<DatabaseException, Author>> findByCodeWithSave(String code, String name,
-			ColligendisUser colligendisUser) {
-		return findByCode(code).flatMap(foundAuthor -> {
-			return foundAuthor.fold(
-					error -> {
-						if (error instanceof NotFoundError) {
-							return save(new Author(code, name), colligendisUser);
-						}
-						return Mono.just(Either.left(error));
-					},
-					author -> Mono.just(Either.right(author)));
-		});
+	public Mono<ExecutionResult<Author>> findByCodeWithSave(String code, String name,
+			Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
+		return findByCode(code, baseLogger)
+				.flatMap(executionResult -> {
+					if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
+						return Mono.just(executionResult);
+					} else if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_NOT_FOUND)) {
+						return create(new Author(code, name), colligendisUserMono, baseLogger);
+					} else {
+						executionResult.logError(baseLogger);
+						return Mono.just(executionResult);
+					}
+				});
 	}
 }

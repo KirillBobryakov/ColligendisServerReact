@@ -4,17 +4,24 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.colligendis.server.database.AbstractNode;
-import com.colligendis.server.database.N4JUtil;
-import com.colligendis.server.database.Relationship;
+import com.colligendis.server.database.numista.model.techdata.Composition;
+import com.colligendis.server.database.numista.model.techdata.Shape;
+import com.colligendis.server.database.numista.model.techdata.Technique;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
 import reactor.core.publisher.Mono;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
+@NoArgsConstructor
 public class NType extends AbstractNode {
 	public final static String LABEL = "NTYPE";
+
+	public NType(String nid) {
+		this.nid = nid;
+	}
 
 	public String nid;
 
@@ -27,7 +34,7 @@ public class NType extends AbstractNode {
 	private Issuer issuer;
 
 	public static final String DURING_OF_RULER = "DURING_OF_RULER";
-	private List<Ruler> rulers = new ArrayList<>();
+	private List<RulingAuthority> rulingAuthorities = new ArrayList<>();
 
 	public static final String ISSUED_BY_ISSUING_ENTITY = "ISSUED_BY_ISSUING_ENTITY";
 	private List<IssuingEntity> issuingEntities = new ArrayList<>();
@@ -96,36 +103,25 @@ public class NType extends AbstractNode {
 	public static final String HAS_CATALOGUE_REFERENCES = "HAS_CATALOGUE_REFERENCES";
 	private List<CatalogueReference> catalogueReferences = new ArrayList<>();
 
-	// public Mono<Boolean> setCurrency(Mono<Currency> currency) {
-	// this.currency = currency;
-	// return ((NTypeService) service).createRelationship(this.getUuid(),
-	// currency.block().getUuid(), "HAS_CURRENCY",
-	// null);
-	// }
+	public static final String HAS_COMPOSITION = "HAS_COMPOSITION";
+	private Composition composition;
 
-	// public Mono<Integer> setOthersCurrencies(Flux<Currency> currencies) {
-	// this.othersCurrencies = currencies;
+	public static final String HAS_SHAPE = "HAS_SHAPE";
+	private Shape shape;
 
-	// return Flux.from(currencies).flatMap(currency -> ((NTypeService)
-	// service).createRelationship(this.getUuid(),
-	// currency.getUuid(), "HAS_CURRENCY", null)).collectList().map(list ->
-	// list.size());
-	// }
+	private String shapeAdditionalDetails;
 
-	// /**
-	// * Push all properties and relationships to the server.
-	// * Results in validation errors if the node violates the constraints by
-	// * dependencies
-	// *
-	// * @return Exception if the changes were pushed fails, prevening early returns
-	// */
-	// public void push(ColligendisUser user) throws Exception {
-	// try {
-	// ((NTypeService) service).createNode(this, user);
+	private Double weight;
 
-	// } catch (Exception e) {
-	// throw new Exception("Failed to push the node to the server", e);
-	// }
-	// }
+	private Double size;
+	private Double size2;
+	private Double thickness;
+
+	public static final String HAS_TECHNIQUES = "HAS_TECHNIQUES";
+	private List<Technique> techniques = new ArrayList<>();
+
+	private String techniqueAdditionalDetails;
+
+	private String alignment;
 
 }

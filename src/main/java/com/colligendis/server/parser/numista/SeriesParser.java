@@ -1,85 +1,76 @@
 package com.colligendis.server.parser.numista;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 
 import org.jsoup.nodes.Element;
+import org.springframework.stereotype.Component;
 
-import com.colligendis.server.database.N4JUtil;
+import com.colligendis.server.database.ExecutionStatus;
+import com.colligendis.server.database.numista.model.Series;
 import com.colligendis.server.database.numista.service.NTypeService;
 import com.colligendis.server.database.numista.service.SeriesService;
+import com.colligendis.server.parser.numista.exception.ParserException;
 
 import reactor.core.publisher.Mono;
-
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
+@Component
+@RequiredArgsConstructor
 public class SeriesParser {
 
-    public static final SeriesParser instance = new SeriesParser();
-    private SeriesService seriesService;
+	private final SeriesService seriesService;
+	private final NTypeService nTypeService;
 
-    private SeriesService getSeriesService() {
-        if (seriesService == null) {
-            seriesService = N4JUtil.getInstance().numistaServices.seriesService;
-        }
-        return seriesService;
-    }
+	public Function<NumistaPage, Mono<NumistaPage>> parse = page -> Mono.defer(() -> parseSeries(page));
 
-    private NTypeService nTypeService;
+	private Mono<NumistaPage> parseSeries(NumistaPage numistaPage) {
 
-    private NTypeService getNTypeService() {
-        if (nTypeService == null) {
-            nTypeService = N4JUtil.getInstance().numistaServices.nTypeService;
-        }
-        return nTypeService;
-    }
+		Element seriesElement = numistaPage.page.selectFirst("#series");
+		if (seriesElement == null) {
+			log.info("nid: {} - Can't find Series on the page", numistaPage.nid);
+			return Mono.just(numistaPage);
+		}
+		Element seriesOption = seriesElement.selectFirst("option");
+		if (seriesOption == null) {
+			log.info("nid: {} - Can't find Series option on the page", numistaPage.nid);
+			return Mono.just(numistaPage);
+		}
+		Map<String, String> seriesMap = NumistaParseUtils.getAttributeWithTextSingleOption(numistaPage.page, "#series",
+				"value");
 
-    public Function<NumistaPage, Mono<NumistaPage>> parse = page -> Mono.defer(() -> parseSeries(page));
+		if (seriesMap == null || seriesMap.get("value") == null || seriesMap.get("value").isEmpty()
+				|| seriesMap.get("text") == null
+				|| seriesMap.get("text").isEmpty()) {
+			log.info("nid: {} - Series option is empty on the page", numistaPage.nid);
+			return Mono.just(numistaPage);
+		}
 
-    private Mono<NumistaPage> parseSeries(NumistaPage numistaPage) {
+		String seriesName = Objects.requireNonNull(seriesMap).get("text");
+		String seriesNid = Objects.requireNonNull(seriesMap).get("value");
 
-        Element seriesElement = numistaPage.page.selectFirst("#series");
-        if (seriesElement == null) {
-            log.info("nid: {} - Can't find Series on the page", numistaPage.nid);
-            return Mono.just(numistaPage);
-        }
-        Element seriesOption = seriesElement.selectFirst("option");
-        if (seriesOption == null) {
-            log.info("nid: {} - Can't find Series option on the page", numistaPage.nid);
-            return Mono.just(numistaPage);
-        }
-        Map<String, String> seriesMap = NumistaParseUtils.getAttributeWithTextSingleOption(numistaPage.page, "#series",
-                "value");
+		return seriesService
+				.findByNidWithSave(seriesNid, seriesName, numistaPage.getNumistaParserUserMono(),
+						numistaPage.getPipelineStepLogger())
+				.flatMap(executionResult -> {
+					ExecutionStatus status = executionResult.getStatus();
+					if (ExecutionStatus.NODE_IS_FOUND.equals(status)
+							|| ExecutionStatus.NODE_WAS_CREATED.equals(status)) {
+						Series series = executionResult.getNode();
+						if (series != null) {
+							return Mono.just(series);
+						}
+					}
+					numistaPage.getPipelineStepLogger().error("Failed to find Series: {}", status);
+					executionResult.logError(numistaPage.getPipelineStepLogger());
+					return Mono.<Series>error(new ParserException("Failed to find Series: " + seriesNid));
+				})
+				.flatMap(series -> nTypeService.setSeries(numistaPage.nType, series,
+						numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger()))
+				.thenReturn(numistaPage);
 
-        if (seriesMap == null || seriesMap.get("value") == null || seriesMap.get("value").isEmpty()
-                || seriesMap.get("text") == null
-                || seriesMap.get("text").isEmpty()) {
-            log.info("nid: {} - Series option is empty on the page", numistaPage.nid);
-            return Mono.just(numistaPage);
-        }
-
-        String seriesName = Objects.requireNonNull(seriesMap).get("text");
-        String seriesNid = Objects.requireNonNull(seriesMap).get("value");
-
-        return getSeriesService().findByNidWithSave(seriesNid, seriesName, numistaPage.colligendisUser)
-                .flatMap(seriesEither -> seriesEither.fold(
-                        seriesErr -> {
-                            return Mono.<NumistaPage>error(
-                                    new RuntimeException("Failed to find or save series: " + seriesErr.message()));
-                        },
-                        series -> {
-                            return getNTypeService().setSeries(numistaPage.nType, series, numistaPage.colligendisUser)
-                                    .flatMap(result -> result.fold(
-                                            resultErr -> {
-                                                return Mono.<NumistaPage>error(new RuntimeException(
-                                                        "Failed to set series: " + resultErr.message()));
-                                            },
-                                            success -> {
-                                                return Mono.just(numistaPage);
-                                            }));
-                        }));
-    }
+	}
 }

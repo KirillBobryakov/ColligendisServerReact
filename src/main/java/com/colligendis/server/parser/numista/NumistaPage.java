@@ -1,35 +1,32 @@
 package com.colligendis.server.parser.numista;
 
-import java.util.function.Consumer;
-import java.util.function.Function;
-import java.util.function.Predicate;
-import java.util.function.UnaryOperator;
-import java.util.stream.Stream;
-
 import org.jsoup.nodes.Document;
-import org.jsoup.nodes.Element;
 
 import com.colligendis.server.database.ColligendisUser;
-import com.colligendis.server.database.N4JUtil;
+import com.colligendis.server.database.ColligendisUserService;
+import com.colligendis.server.database.ExecutionStatus;
 import com.colligendis.server.database.exception.DatabaseException;
 import com.colligendis.server.database.numista.model.CollectibleType;
 import com.colligendis.server.database.numista.model.Currency;
 import com.colligendis.server.database.numista.model.Denomination;
 import com.colligendis.server.database.numista.model.Issuer;
 import com.colligendis.server.database.numista.model.NType;
-import com.colligendis.server.parser.AbstractPageParser;
+import com.colligendis.server.database.numista.service.NTypeService;
+import com.colligendis.server.logger.BaseLogger;
 import com.colligendis.server.parser.ParsingStatus;
+import com.colligendis.server.parser.numista.exception.ParserException;
 import com.colligendis.server.util.Either;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
-import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Mono;
 
-@Slf4j
 @Data
 @EqualsAndHashCode(callSuper = false)
 public class NumistaPage {
+
+	private final NTypeService nTypeService;
+	private final ColligendisUserService colligendisUserService;
 
 	public static final String TYPE_PAGE_PREFIX = "https://en.numista.com/catalogue/contributions/modifier.php?id=";
 
@@ -40,53 +37,102 @@ public class NumistaPage {
 
 	public ParsingStatus parsingStatus = ParsingStatus.NOT_CHANGED;
 
+	@EqualsAndHashCode.Exclude
+	private final BaseLogger pipelineStepLogger = new BaseLogger();
+
 	public NType nType = null;
+
 	public CollectibleType collectibleType = null;
 	public Mono<Either<DatabaseException, CollectibleType>> collectibleTypeMono = null;
 
 	public Issuer issuer = null;
 	public Mono<Either<DatabaseException, Issuer>> issuerMono = null;
 
-	public ColligendisUser colligendisUser = null;
-
-	public Mono<ColligendisUser> colligendisUserM = null;
-
-	public Mono<Either<DatabaseException, ColligendisUser>> colligendisUserMono = null;
-
 	public Currency currency = null;
 	public Denomination denomination = null;
 
-	public NumistaPage(String nid) {
+	public NumistaPage(String nid, ColligendisUserService colligendisUserService, NTypeService nTypeService) {
 		this.nid = nid;
 		this.url = TYPE_PAGE_PREFIX + nid;
-
-		this.colligendisUserMono = Mono.defer(() -> N4JUtil
-				.getInstance().numistaServices.colligendisUserService
-				.findByUuid("b4205781-58b8-488c-9c5a-0e891483bca1"))
-				.cache();
-
-		this.colligendisUserM = colligendisUserMono.map(either -> either.fold(
-				(error) -> {
-					log.error("Error finding colligendis user: {}", error.message());
-					return null;
-				},
-				(colligendisUser) -> {
-					return colligendisUser;
-				}));
-
-		this.colligendisUser = colligendisUserMono.block().fold(
-				(error) -> {
-					log.error("Error finding colligendis user: {}", error.message());
-					return null;
-				},
-				(colligendisUser) -> {
-					return colligendisUser;
-				});
-
+		this.colligendisUserService = colligendisUserService;
+		this.nTypeService = nTypeService;
 	}
 
-	public static Mono<NumistaPage> create(String nid) {
-		return Mono.defer(() -> Mono.just(new NumistaPage(nid)));
+	/**
+	 * Resolves lazily so the Mono is used only after ColligendisUserService is
+	 * fully initialized.
+	 */
+	public Mono<ColligendisUser> getNumistaParserUserMono() {
+		return colligendisUserService.getNumistaParserUserMono();
+	}
+
+	public static Mono<NumistaPage> create(String nid, ColligendisUserService colligendisUserService,
+			NTypeService nTypeService) {
+		return Mono.fromSupplier(() -> new NumistaPage(nid, colligendisUserService, nTypeService));
+	}
+
+	public Mono<NumistaPage> loadNType() {
+		return Mono.defer(() -> {
+			return nTypeService.findByNid(nid, pipelineStepLogger)
+					.flatMap(executionResult -> {
+						if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
+							this.nType = executionResult.getNode();
+							return Mono.just(this);
+						} else if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_NOT_FOUND)) {
+							pipelineStepLogger.warning("NType: (nid: {}) was creating", nid);
+							return nTypeService.create(new NType(nid), getNumistaParserUserMono(), pipelineStepLogger)
+									.flatMap(createdExecutionResult -> {
+										if (createdExecutionResult.getStatus()
+												.equals(ExecutionStatus.NODE_WAS_CREATED)) {
+											this.nType = createdExecutionResult.getNode();
+											pipelineStepLogger.info("NType created successfully with nid: {}", nid);
+											return Mono.just(this);
+										} else {
+											pipelineStepLogger.error("Failed to create NType with nid: {}", nid);
+											createdExecutionResult.logError(pipelineStepLogger);
+											return Mono.error(new ParserException(
+													"Failed to create NType with nid: " + nid + " - "
+															+ createdExecutionResult.getStatus()));
+										}
+									});
+						} else {
+							pipelineStepLogger.error("Failed to load NType with nid: {}", nid);
+							executionResult.logError(pipelineStepLogger);
+							return Mono.error(new ParserException(
+									"Failed to load NType with nid: " + nid + " - " + executionResult.getStatus()));
+						}
+					});
+		});
+	}
+
+	public Mono<NumistaPage> saveNType() {
+		return Mono.defer(() -> {
+			if (nType == null) {
+				return Mono.error(new ParserException("NType is null while saving NType with nid: " + nid));
+			}
+			return nTypeService.update(nType, getNumistaParserUserMono(), pipelineStepLogger)
+					.flatMap(updatedExecutionResult -> {
+						if (updatedExecutionResult.getStatus().equals(ExecutionStatus.NODE_WAS_UPDATED)) {
+							pipelineStepLogger.info("NType updated successfully with nid: {}", nid);
+							return Mono.just(this);
+						} else if (updatedExecutionResult.getStatus().equals(ExecutionStatus.NODE_IS_NOT_FOUND)) {
+							pipelineStepLogger.error("NType not found with nid: {}", nid);
+							updatedExecutionResult.logError(pipelineStepLogger);
+							return Mono.error(new ParserException(
+									"NType not found with nid: " + nid + " - " + updatedExecutionResult.getStatus()));
+						} else if (updatedExecutionResult.getStatus().equals(ExecutionStatus.NODE_NOTHING_TO_UPDATE)) {
+							pipelineStepLogger.info("NType has no properties to update with nid: {}", nid);
+							return Mono.just(this);
+						} else {
+							pipelineStepLogger.error("Failed to update NType with nid: {}", nid);
+							updatedExecutionResult.logError(pipelineStepLogger);
+							return Mono.error(new ParserException(
+									"Failed to update NType with nid: " + nid + " - "
+											+ updatedExecutionResult.getStatus()));
+						}
+					});
+
+		});
 	}
 
 	// .andThen(pageParser.mintageParser)

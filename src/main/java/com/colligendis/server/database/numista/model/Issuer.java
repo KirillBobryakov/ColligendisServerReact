@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.colligendis.server.database.AbstractNode;
-import com.colligendis.server.database.N4JUtil;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -43,28 +42,28 @@ import lombok.ToString;
 @ToString(callSuper = true, onlyExplicitlyIncluded = true)
 public class Issuer extends AbstractNode {
 
-    public static final String LABEL = "ISSUER";
+	public static final String LABEL = "ISSUER";
 
-    public static final String CONTAINS_ISSUING_ENTITY = "CONTAINS_ISSUING_ENTITY";
-    public static final String CONTAINS_CURRENCY = "CONTAINS_CURRENCY";
+	public static final String CONTAINS_ISSUING_ENTITY = "CONTAINS_ISSUING_ENTITY";
+	public static final String CONTAINS_CURRENCY = "CONTAINS_CURRENCY";
 
-    /**
-     * Unique String field from Numista
-     */
-    @ToString.Include
-    private String numistaCode;
-    /**
-     * Unique String field from Numista
-     */
-    @ToString.Include
-    private String name;
+	/**
+	 * Unique String field from Numista
+	 */
+	@ToString.Include
+	private String numistaCode;
+	/**
+	 * Unique String field from Numista
+	 */
+	@ToString.Include
+	private String name;
 
-    private List<String> ruAlternativeNames = new ArrayList<>();
+	private List<String> ruAlternativeNames = new ArrayList<>();
 
-    public static final String RELATE_TO_SUBJECT = "RELATE_TO_SUBJECT";
-    private Subject parentSubject;
+	public static final String RELATE_TO_SUBJECT = "RELATE_TO_SUBJECT";
+	private Subject parentSubject;
 
-    public static final String RELATE_TO_COUNTRY = "RELATE_TO_COUNTRY";
-    private Country country;
+	public static final String RELATE_TO_COUNTRY = "RELATE_TO_COUNTRY";
+	private Country country;
 
 }

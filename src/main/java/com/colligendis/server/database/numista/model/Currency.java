@@ -83,4 +83,10 @@ public class Currency extends AbstractNode {
 		this.fullName = fullName;
 	}
 
+	public Currency(String nid, String fullName, String name) {
+		this.nid = nid;
+		this.fullName = fullName;
+		this.name = name;
+	}
+
 }

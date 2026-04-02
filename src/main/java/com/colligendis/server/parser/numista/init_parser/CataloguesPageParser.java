@@ -7,21 +7,23 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+import org.springframework.stereotype.Component;
 
-import com.colligendis.server.database.N4JUtil;
-import com.colligendis.server.database.exception.NotFoundError;
 import com.colligendis.server.database.numista.model.Author;
 import com.colligendis.server.database.numista.model.Catalogue;
 import com.colligendis.server.database.numista.service.AuthorService;
 import com.colligendis.server.database.numista.service.CatalogueService;
+import com.colligendis.server.logger.BaseLogger;
 import com.colligendis.server.parser.numista.NumistaParseUtils;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
+@Component
+@RequiredArgsConstructor
 public class CataloguesPageParser {
 	public static final String CATALOGUES_LOCAL_DIR = "/Users/kirillbobryakov/ColligendisServerReact/numista/CATALOGUES";
 	public static final String AUTHORS_LOCAL_DIR = "/Users/kirillbobryakov/ColligendisServerReact/numista/AUTHORS";
@@ -33,13 +35,9 @@ public class CataloguesPageParser {
 	public static final String AUTHORS_LOCAL_FILE = "/Users/kirillbobryakov/ColligendisServerReact/numista/AUTHORS/authors.html";
 
 	private final CatalogueService catalogueService;
-
 	private final AuthorService authorService;
 
-	public CataloguesPageParser() {
-		this.catalogueService = N4JUtil.getInstance().numistaServices.catalogueService;
-		this.authorService = N4JUtil.getInstance().numistaServices.authorService;
-	}
+	private final BaseLogger cataloguesPageParserLogger = new BaseLogger();
 
 	public void parseAllCataloguesAndSave(boolean fromLocalFile) {
 		Document document = null;
@@ -86,7 +84,7 @@ public class CataloguesPageParser {
 		final java.util.concurrent.atomic.AtomicInteger savedCount = new java.util.concurrent.atomic.AtomicInteger(0);
 
 		Flux.fromIterable(catalogues)
-				.flatMap(catalogue -> catalogueService.save(catalogue, null)
+				.flatMap(catalogue -> catalogueService.create(catalogue, null, cataloguesPageParserLogger)
 						.doOnSuccess(c -> {
 							int current = savedCount.incrementAndGet();
 							System.out.printf("Saved catalogue %d/%d: %s%n", current, totalCatalogues,
@@ -144,7 +142,7 @@ public class CataloguesPageParser {
 
 		// Use controlled concurrency to prevent connection pool exhaustion
 		Flux.fromIterable(authors)
-				.flatMap(author -> authorService.save(author, null)
+				.flatMap(author -> authorService.create(author, null, cataloguesPageParserLogger)
 						.doOnSuccess(a -> {
 							int current = savedCount.incrementAndGet();
 							System.out.printf("Saved author %d/%d: %s%n", current, totalAuthors, author.getName());
@@ -160,66 +158,71 @@ public class CataloguesPageParser {
 
 	}
 
-	public void parseCatalogue(String code) {
+	// public void parseCatalogue(String code) {
 
-		catalogueService.findByCode(code)
-				.flatMap(either -> either.fold(
-						error -> {
-							if (error instanceof NotFoundError) {
-								System.out.println("Catalogue not found: " + code);
-								return Mono.empty();
-							}
-							return Mono.empty();
-						},
-						catalogue -> Mono.fromCallable(() -> {
-							System.out
-									.println("Parsing catalogue: " + catalogue.getCode() + " " + catalogue.getNumber());
-							Document document = NumistaParseUtils
-									.loadPageByURL("https://en.numista.com/" + catalogue.getNumber());
+	// catalogueService.findByCode(code).
 
-							Element main_content = document.selectFirst("main#main");
+	// catalogueService.findByCode(code)
+	// .flatMap(either -> either.fold(
+	// error -> {
+	// if (error instanceof NotFoundError) {
+	// System.out.println("Catalogue not found: " + code);
+	// return Mono.empty();
+	// }
+	// return Mono.empty();
+	// },
+	// catalogue -> Mono.fromCallable(() -> {
+	// System.out
+	// .println("Parsing catalogue: " + catalogue.getCode() + " " +
+	// catalogue.getNumber());
+	// Document document = NumistaParseUtils
+	// .loadPageByURL("https://en.numista.com/" + catalogue.getNumber());
 
-							String title = main_content.selectFirst("#main_title h1").text();
-							catalogue.setTitle(title);
+	// Element main_content = document.selectFirst("main#main");
 
-							Element reference_catalogue = main_content.selectFirst("table.reference_catalogue");
-							Elements reference_catalogue_rows = reference_catalogue.selectFirst("tbody").select("tr");
-							for (Element reference_catalogue_row : reference_catalogue_rows) {
-								Element cell_header = reference_catalogue_row.selectFirst("th");
-								Element cell_value = reference_catalogue_row.selectFirst("td");
-								if (cell_header.text().equals("Title translation")) {
-									catalogue.setTitle_en(cell_value.text());
-								} else if (cell_header.text().equals("Author")) {
-									Elements author_links = cell_value.select("a");
+	// String title = main_content.selectFirst("#main_title h1").text();
+	// catalogue.setTitle(title);
 
-									List<String> authorCodes = author_links.stream()
-											.map(t -> t.attr("href").replace("../people/", ""))
-											.toList();
+	// Element reference_catalogue =
+	// main_content.selectFirst("table.reference_catalogue");
+	// Elements reference_catalogue_rows =
+	// reference_catalogue.selectFirst("tbody").select("tr");
+	// for (Element reference_catalogue_row : reference_catalogue_rows) {
+	// Element cell_header = reference_catalogue_row.selectFirst("th");
+	// Element cell_value = reference_catalogue_row.selectFirst("td");
+	// if (cell_header.text().equals("Title translation")) {
+	// catalogue.setTitle_en(cell_value.text());
+	// } else if (cell_header.text().equals("Author")) {
+	// Elements author_links = cell_value.select("a");
 
-									Flux.fromIterable(authorCodes).flatMap(
-											authorCode -> authorService.findByCode(authorCode)
-													.flatMap(foundAuthor -> foundAuthor.fold(
-															error -> {
-																if (error instanceof NotFoundError) {
-																	log.error("Author not found: " + foundAuthor);
-																	return Mono.empty();
-																}
-																return Mono.empty();
-															},
-															author -> {
-																return Mono.just(author);
-															})))
+	// List<String> authorCodes = author_links.stream()
+	// .map(t -> t.attr("href").replace("../people/", ""))
+	// .toList();
 
-											.subscribe();
+	// Flux.fromIterable(authorCodes).flatMap(
+	// authorCode -> authorService.findByCode(authorCode)
+	// .flatMap(foundAuthor -> foundAuthor.fold(
+	// error -> {
+	// if (error instanceof NotFoundError) {
+	// log.error("Author not found: " + foundAuthor);
+	// return Mono.empty();
+	// }
+	// return Mono.empty();
+	// },
+	// author -> {
+	// return Mono.just(author);
+	// })))
 
-								}
-							}
+	// .subscribe();
 
-							System.out.println("");
+	// }
+	// }
 
-							return true;
-						})))
-				.subscribe();
+	// System.out.println("");
 
-	}
+	// return true;
+	// })))
+	// .subscribe();
+
+	// }
 }

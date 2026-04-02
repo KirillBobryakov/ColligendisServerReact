@@ -8,111 +8,110 @@ import java.util.regex.Pattern;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 
-import com.colligendis.server.database.ColligendisUser;
-import com.colligendis.server.database.N4JUtil;
+import com.colligendis.server.database.ColligendisUserService;
 import com.colligendis.server.database.common.model.Year;
+import com.colligendis.server.database.common.service.CalendarService;
 import com.colligendis.server.database.common.service.YearService;
 
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @Service
 @Slf4j
+@RequiredArgsConstructor
 public class YearPeriodParserService {
-    private static final Pattern PERIOD_PATTERN = Pattern.compile("\\(([^()]+)\\)");
+	private static final Pattern PERIOD_PATTERN = Pattern.compile("\\(([^()]+)\\)");
 
-    public Mono<CirculationPeriods> parsePeriods(String fullName, ColligendisUser user) {
-        Matcher matcher = PERIOD_PATTERN.matcher(fullName);
+	private final YearService yearService;
+	private final ColligendisUserService colligendisUserService;
 
-        List<String> raw = matcher.results()
-                .map(m -> m.group(1)) // content only, inside (...)
-                .toList();
+	public Mono<CirculationPeriods> parsePeriods(String fullName) {
+		Matcher matcher = PERIOD_PATTERN.matcher(fullName);
 
-        if (raw.isEmpty()) {
-            return Mono.just(CirculationPeriods.empty());
-        }
+		List<String> raw = matcher.results()
+				.map(m -> m.group(1)) // content only, inside (...)
+				.toList();
 
-        // For each element in raw, split by "," and trim; flatten into newRaw
-        List<String> newRaw = raw.stream()
-                .flatMap(s -> List.of(s.split(",")).stream())
-                .map(String::trim)
-                .filter(str -> !str.isEmpty())
-                .toList();
+		if (raw.isEmpty()) {
+			return Mono.just(CirculationPeriods.empty());
+		}
 
-        return Flux.fromIterable(newRaw)
-                .flatMap(str -> parseSingle(str, user))
-                .collectList()
-                .map(CirculationPeriods::new);
-    }
+		// For each element in raw, split by "," and trim; flatten into newRaw
+		List<String> newRaw = raw.stream()
+				.flatMap(s -> List.of(s.split(",")).stream())
+				.map(String::trim)
+				.filter(str -> !str.isEmpty())
+				.toList();
 
-    private Mono<CirculationPeriod> parseSingle(String inside, ColligendisUser user) {
-        // Case 1: "(notgeld, 1914-1924)"
-        final String kind;
-        final String yearsPart;
+		return Flux.fromIterable(newRaw)
+				.flatMap(str -> parseSingle(str))
+				.collectList()
+				.map(CirculationPeriods::new);
+	}
 
-        if (inside.contains(",")) {
-            String[] split = inside.split(",", 2);
-            kind = split[0].trim();
-            yearsPart = split[1].trim();
-        } else {
-            kind = null;
-            yearsPart = inside;
-        }
+	private Mono<CirculationPeriod> parseSingle(String inside) {
+		// Case 1: "(notgeld, 1914-1924)"
+		final String kind;
+		final String yearsPart;
 
-        // Case 2: "1990-date", "1936", "1887-1918"
-        String[] parts = yearsPart.split("-");
+		if (inside.contains(",")) {
+			String[] split = inside.split(",", 2);
+			kind = split[0].trim();
+			yearsPart = split[1].trim();
+		} else {
+			kind = null;
+			yearsPart = inside;
+		}
 
-        if (parts.length == 1) {
-            return parseSingleYear(parts[0], user)
-                    .map(y -> new CirculationPeriod(Optional.of(y), Optional.of(y), kind));
-        }
+		// Case 2: "1990-date", "1936", "1887-1918"
+		String[] parts = yearsPart.split("-");
 
-        if (parts.length == 2) {
-            return parseDoubleYear(parts[0], parts[1], user, kind);
-        }
+		if (parts.length == 1) {
+			return parseSingleYear(parts[0])
+					.map(y -> new CirculationPeriod(Optional.of(y), Optional.of(y), kind));
+		}
 
-        return Mono.error(new IllegalStateException("Invalid year format: " + inside));
-    }
+		if (parts.length == 2) {
+			return parseDoubleYear(parts[0], parts[1], kind);
+		}
 
-    private Mono<Year> parseSingleYear(String yearStr, ColligendisUser user) {
-        if (!StringUtils.isNumeric(yearStr)) {
-            log.error("Year not numeric: {}", yearStr);
-            return Mono.empty();
-        }
+		return Mono.error(new IllegalStateException("Invalid year format: " + inside));
+	}
 
-        int year = Integer.parseInt(yearStr);
+	private Mono<Year> parseSingleYear(String yearStr) {
+		if (!StringUtils.isNumeric(yearStr)) {
+			log.error("Year not numeric: {}", yearStr);
+			return Mono.empty();
+		}
 
-        YearService yearService = N4JUtil.getInstance().commonServices.yearService;
+		int year = Integer.parseInt(yearStr);
 
-        return yearService.findGregorianYearByValue(year, user)
-                .map(e -> e.simpleFold(log));
-    }
+		return yearService.findGregorianYearByValue(year);
+	}
 
-    private Mono<CirculationPeriod> parseDoubleYear(
-            String fromStr, String tillStr,
-            ColligendisUser user, String kind) {
+	private Mono<CirculationPeriod> parseDoubleYear(
+			String fromStr, String tillStr,
+			String kind) {
 
-        Mono<Optional<Year>> fromMono = parseYearValue(fromStr, user).map(Optional::of);
+		Mono<Optional<Year>> fromMono = parseYearValue(fromStr).map(Optional::of);
 
-        Mono<Optional<Year>> tillMono = "date".equalsIgnoreCase(tillStr)
-                ? Mono.just(Optional.empty())
-                : parseYearValue(tillStr, user).map(Optional::of);
+		Mono<Optional<Year>> tillMono = "date".equalsIgnoreCase(tillStr)
+				? Mono.just(Optional.empty())
+				: parseYearValue(tillStr).map(Optional::of);
 
-        return Mono.zip(fromMono, tillMono,
-                (from, till) -> new CirculationPeriod(from, till, kind));
-    }
+		return fromMono.flatMap(from -> tillMono.map(till -> new CirculationPeriod(from, till, kind)));
+	}
 
-    private Mono<Year> parseYearValue(String str, ColligendisUser user) {
-        if (!StringUtils.isNumeric(str)) {
-            return Mono.error(new IllegalStateException("Year not numeric: " + str));
-        }
+	private Mono<Year> parseYearValue(String str) {
+		if (!StringUtils.isNumeric(str)) {
+			return Mono.error(new IllegalStateException("Year not numeric: " + str));
+		}
 
-        int year = Integer.parseInt(str);
+		int year = Integer.parseInt(str);
 
-        YearService yearService = N4JUtil.getInstance().commonServices.yearService;
-
-        return yearService.findGregorianYearByValue(year, user)
-                .map(e -> e.simpleFold(log));
-    }
+		return yearService.findYearByValueWithCreate(year, CalendarService.GREGORIAN,
+				colligendisUserService.getNumistaParserUserMono());
+	}
 }

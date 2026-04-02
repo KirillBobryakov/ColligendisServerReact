@@ -15,6 +15,8 @@ spring:
   
   neo4j:
     uri: bolt://localhost:7687
+    # Must match the database selected in Neo4j Browser (e.g. :use neo4j)
+    database: neo4j
     authentication:
       username: neo4j
       password: password
@@ -32,7 +34,7 @@ jwt:
 logging:
   level:
     root: WARN
-    "[com.colligendis]": INFO
+    "[com.colligendis]": TRACE
     "[org.springframework.security]": WARN
     "[org.springframework.web]": WARN
     # "[org.springframework.data.neo4j]": DEBUG
@@ -51,4 +53,4 @@ logging:
 performance:
   monitoring:
     enabled: true
-    threshold-ms: 10
+    threshold-ms: 1000
