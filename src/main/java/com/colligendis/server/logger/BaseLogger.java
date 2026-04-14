@@ -6,7 +6,6 @@ import org.slf4j.helpers.FormattingTuple;
 import org.slf4j.helpers.MessageFormatter;
 import org.springframework.boot.logging.LogLevel;
 
-import com.colligendis.server.database.ExecutionResult;
 import com.colligendis.server.parser.numista.NumistaPage;
 
 import lombok.extern.slf4j.Slf4j;
@@ -24,7 +23,7 @@ public class BaseLogger {
 	// private final LogLevel indentLevel = LogLevel.valueOf(
 	// System.getProperty("logging.level.com.colligendis", "DEBUG").toUpperCase());
 
-	private final LogLevel indentLevel = LogLevel.DEBUG;
+	private final LogLevel indentLevel = LogLevel.TRACE;
 
 	public static final String ANSI_BLACK = "\u001B[30m";
 	public static final String ANSI_RED = "\u001B[31m";
@@ -36,6 +35,7 @@ public class BaseLogger {
 
 	public static final String ANSI_GREEN = "\u001B[32m";
 	public static final String ANSI_LIGHT_GREEN = "\u001B[92m";
+	public static final String ANSI_DARK_GREEN = "\u001B[38;5;28m";
 
 	public static final String ANSI_BLUE = "\u001B[34m";
 
@@ -79,12 +79,28 @@ public class BaseLogger {
 		log(ANSI_BLACK + slf4jFormat(format, args) + ANSI_RESET, LogLevel.INFO);
 	}
 
+	public void infoGreen(String format, Object... args) {
+		log(ANSI_GREEN + slf4jFormat(format, args) + ANSI_RESET, LogLevel.INFO);
+	}
+
+	public void infoOrange(String format, Object... args) {
+		log(ANSI_ORANGE + slf4jFormat(format, args) + ANSI_RESET, LogLevel.INFO);
+	}
+
 	public void infoBlue(String format, Object... args) {
 		log(ANSI_BLUE + slf4jFormat(format, args) + ANSI_RESET, LogLevel.INFO);
 	}
 
 	public void debug(String format, Object... args) {
 		log(ANSI_BLACK + slf4jFormat(format, args) + ANSI_RESET, LogLevel.DEBUG);
+	}
+
+	public void debugOrange(String format, Object... args) {
+		log(ANSI_ORANGE + slf4jFormat(format, args) + ANSI_RESET, LogLevel.DEBUG);
+	}
+
+	public void debugGreen(String format, Object... args) {
+		log(ANSI_DARK_GREEN + slf4jFormat(format, args) + ANSI_RESET, LogLevel.DEBUG);
 	}
 
 	public void debugRed(String format, Object... args) {
@@ -101,6 +117,10 @@ public class BaseLogger {
 
 	public void traceOrange(String format, Object... args) {
 		log(ANSI_ORANGE + slf4jFormat(format, args) + ANSI_RESET, LogLevel.TRACE);
+	}
+
+	public void traceGreen(String format, Object... args) {
+		log(ANSI_DARK_GREEN + slf4jFormat(format, args) + ANSI_RESET, LogLevel.TRACE);
 	}
 
 	/**

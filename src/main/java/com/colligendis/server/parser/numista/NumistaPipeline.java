@@ -23,6 +23,15 @@ public class NumistaPipeline {
 	private final RulerParser rulerParser;
 	private final IssuingEntityParser issuingEntityParser;
 	private final CurrencyParser currencyParser;
+	private final DenominationParser denominationParsing;
+	private final CommemoratedEventParser commemoratedEventParser;
+	private final SeriesParser seriesParser;
+	private final DemonetizedAndIssueDateParser demonetizedAndIssueDateParser;
+	private final ReferenceNumberParser referenceNumberParser;
+	private final TechnicalDataParser technicalDataParser;
+	private final NTypePartParser nTypePartParser;
+	private final MintParser mintParser;
+	private final VariantsParser variantsParser;
 	private final ColligendisUserService colligendisUserService;
 
 	public Mono<NumistaPage> pipeline(String nid) {
@@ -37,6 +46,15 @@ public class NumistaPipeline {
 				.flatMap(rulerParser::parse)
 				.flatMap(issuingEntityParser::parse)
 				.flatMap(currencyParser::parse)
+				.flatMap(denominationParsing::parse)
+				.flatMap(commemoratedEventParser::parse)
+				.flatMap(seriesParser::parse)
+				.flatMap(demonetizedAndIssueDateParser::parse)
+				.flatMap(referenceNumberParser::parse)
+				.flatMap(technicalDataParser::parse)
+				.flatMap(nTypePartParser::parse)
+				.flatMap(mintParser::parse)
+				.flatMap(variantsParser::parse)
 				.flatMap(NumistaPage::saveNType)
 				.doFinally(signalType -> {
 					BaseLogger log = pipelineLoggerRef.get();

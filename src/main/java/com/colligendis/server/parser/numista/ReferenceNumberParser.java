@@ -1,249 +1,227 @@
-// package com.colligendis.server.parser.numista;
+package com.colligendis.server.parser.numista;
 
-// import java.text.Normalizer;
-// import java.util.ArrayList;
-// import java.util.List;
-// import java.util.function.Function;
+import java.util.ArrayList;
+import java.util.List;
 
-// import org.jsoup.nodes.Element;
-// import org.jsoup.select.Elements;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
+import org.springframework.stereotype.Component;
 
-// import lombok.AllArgsConstructor;
-// import lombok.Data;
-// import reactor.core.publisher.Flux;
-// import reactor.core.publisher.Mono;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.RequiredArgsConstructor;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
-// import com.colligendis.server.database.ColligendisUser;
-// import com.colligendis.server.database.N4JUtil;
-// import com.colligendis.server.database.exception.NotFoundError;
-// import com.colligendis.server.database.numista.service.CatalogueService;
-// import com.colligendis.server.database.numista.service.NTypeService;
-// import com.google.gson.Gson;
-// import com.colligendis.server.database.numista.model.CatalogueReference;
-// import
-// com.colligendis.server.database.numista.service.CatalogueReferenceService;
-// import lombok.extern.slf4j.Slf4j;
+import com.colligendis.server.database.numista.service.CatalogueService;
+import com.colligendis.server.database.numista.service.NTypeService;
+import com.colligendis.server.database.result.CreateNodeExecutionStatus;
+import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
+import com.colligendis.server.database.result.FindExecutionStatus;
+import com.colligendis.server.parser.numista.exception.ParserException;
+import com.colligendis.server.database.numista.model.CatalogueReference;
+import com.colligendis.server.database.numista.service.CatalogueReferenceService;
 
-// @Slf4j
-// public class ReferenceNumberParser {
-// public static final ReferenceNumberParser instance = new
-// ReferenceNumberParser();
+@Component
+@RequiredArgsConstructor
+public class ReferenceNumberParser extends Parser {
 
-// private static final String ANSI_BLUE = "\u001B[34m";
-// private static final String ANSI_RED = "\u001B[31m";
-// private static final String ANSI_RESET = "\u001B[0m";
+	private final CatalogueService catalogueService;
+	private final CatalogueReferenceService catalogueReferenceService;
+	private final NTypeService nTypeService;
 
-// private CatalogueService catalogueService;
+	@Override
+	protected Mono<NumistaPage> parse(NumistaPage numistaPage) {
+		return Mono.defer(() -> {
+			List<ReferenceToCatalogue> references = new ArrayList<>();
 
-// private CatalogueService getCatalogueService() {
-// if (catalogueService == null) {
-// catalogueService = N4JUtil.getInstance().numistaServices.catalogueService;
-// }
-// return catalogueService;
-// }
+			Elements referenceInputs = numistaPage.page.select("div[class=reference_input]");
 
-// private CatalogueReferenceService catalogueReferenceService;
+			for (Element element : referenceInputs) {
+				Element catalogueElement = element.selectFirst("option");
+				Element numberElement = element.selectFirst("input");
 
-// private CatalogueReferenceService getCatalogueReferenceService() {
-// if (catalogueReferenceService == null) {
-// catalogueReferenceService =
-// N4JUtil.getInstance().numistaServices.catalogueReferenceService;
-// }
-// return catalogueReferenceService;
-// }
+				if (catalogueElement == null || numberElement == null)
+					continue;
 
-// private NTypeService nTypeService;
+				if (!numberElement.attr("value").isEmpty()) {
+					ReferenceToCatalogue referenceToCatalogue = new ReferenceToCatalogue(
+							catalogueElement.attr("value"),
+							catalogueElement.text(),
+							numberElement.attr("value"));
 
-// private NTypeService getNTypeService() {
-// if (nTypeService == null) {
-// nTypeService = N4JUtil.getInstance().numistaServices.nTypeService;
-// }
-// return nTypeService;
-// }
+					references.add(referenceToCatalogue);
+				}
+			}
 
-// public Function<NumistaPage, Mono<NumistaPage>> parse = page -> Mono.defer(()
-// -> parseReferenceNumber(page));
+			if (references.isEmpty()) {
+				return Mono.just(numistaPage);
+			}
 
-// private Mono<NumistaPage> parseReferenceNumber(NumistaPage numistaPage) {
+			return Flux.fromIterable(references)
+					.flatMap(ref -> processReference(ref, numistaPage))
+					.collectList()
+					.flatMap(catalogueReferences -> {
 
-// List<ReferenceToCatalogue> references = new ArrayList<>();
+						if (catalogueReferences.isEmpty()) {
+							numistaPage.getPipelineStepLogger()
+									.info("Catalogue references is empty while linking to NType");
+							return Mono.just(numistaPage);
+						}
 
-// Elements referenceInputs =
-// numistaPage.page.select("div[class=reference_input]");
+						return nTypeService.setCatalogueReferences(numistaPage.nType, catalogueReferences,
+								numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger())
+								.flatMap(executionResult -> {
+									if (executionResult.getStatus()
+											.equals(CreateRelationshipExecutionStatus.WAS_CREATED)
+											|| executionResult.getStatus()
+													.equals(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)) {
 
-// for (Element element : referenceInputs) {
-// Element catalogueElement = element.selectFirst("option");
-// Element numberElement = element.selectFirst("input");
+										numistaPage.getPipelineStepLogger()
+												.info("Catalogue references linked to NType: {}",
+														numistaPage.nType.nid);
+										return Mono.just(numistaPage);
+									} else {
 
-// if (catalogueElement == null || numberElement == null)
-// continue;
+										return Mono.<NumistaPage>error(
+												new ParserException("Failed to link catalogue references to NType: "
+														+ numistaPage.nType.nid));
+									}
+								});
+					});
+		});
+	}
 
-// if (!numberElement.attr("value").isEmpty()) {
-// ReferenceToCatalogue referenceToCatalogue = new ReferenceToCatalogue(
-// catalogueElement.attr("value"),
-// catalogueElement.text(),
-// numberElement.attr("value"));
+	private Mono<CatalogueReference> processReference(
+			ReferenceToCatalogue ref, NumistaPage numistaPage) {
+		// Step 1: Try to find existing catalogue reference
+		return catalogueReferenceService.findByNumberAndCatalogueCode(ref.number,
+				ref.catalogueCode, numistaPage.getPipelineStepLogger())
+				.flatMap(crExecutionResult -> {
+					if (crExecutionResult.getStatus().equals(FindExecutionStatus.NOT_FOUND)) {
+						return catalogueService.findByCode(ref.catalogueCode, numistaPage.getPipelineStepLogger())
+								.flatMap(catalogueExecutionResult -> {
+									if (catalogueExecutionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
+										return catalogueReferenceService.create(ref.number,
+												catalogueExecutionResult.getNode(),
+												numistaPage.getNumistaParserUserMono(),
+												numistaPage.getPipelineStepLogger())
+												.flatMap(createExecutionResult -> {
+													if (createExecutionResult.getStatus()
+															.equals(CreateNodeExecutionStatus.WAS_CREATED)) {
+														return Mono.just(
+																(CatalogueReference) createExecutionResult.getNode());
+													}
+													return Mono.<CatalogueReference>empty();
+												});
+									} else {
+										numistaPage.getPipelineStepLogger()
+												.error("Failed to find catalogue by code: {}", ref.catalogueCode);
+										return Mono.<CatalogueReference>empty();
+									}
+								});
+					} else if (crExecutionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
+						return Mono.just(crExecutionResult.getNode());
+					} else {
+						return Mono.<CatalogueReference>empty();
+					}
+				});
 
-// references.add(referenceToCatalogue);
-// }
-// }
+	}
 
-// if (references.isEmpty()) {
-// return Mono.just(numistaPage);
-// }
+	public static final String CATALOGUE_SEARCH = "https://en.numista.com/catalogue/search_catalogues.php?q=";
 
-// return Flux.fromIterable(references)
-// .flatMap(ref -> processReference(ref, numistaPage))
-// .collectList()
-// .flatMap(catalogueReferences ->
-// linkCatalogueReferencesToNType(catalogueReferences, numistaPage))
-// .thenReturn(numistaPage);
-// }
+	/*
+	 * References
+	 * Last update: 26 September 2024
+	 *
+	 * The field specifies the alphanumeric code that identifies the coin type in
+	 * a
+	 * reference catalogue. Up to ten references can be specified (if some
+	 * reference
+	 * catalogues are missing, you can request their addition to the database). If
+	 * more references exist for a coin, the additional ones may be added in the
+	 * comments section.
+	 *
+	 * Order of references
+	 * When possible, the same sequence of references should be used for all the
+	 * coin types of an issuer. Newer, more authoritative, and more exhaustive
+	 * standard references should appear first.
+	 *
+	 * What if same entry on Numista is linked to multiple reference numbers in
+	 * the
+	 * same catalogue?
+	 * If a coin type has more than one code in a reference catalogue, always add
+	 * the first one (or the most relevant). The same reference catalogue may be
+	 * added in a new line for recording multiple codes, provided you did not
+	 * reach
+	 * the maximum number of references.
+	 *
+	 * Missing coin in a catalogue
+	 * If only a small number of coins are missing from a standard monograph
+	 * (reference catalogue dedicated to a very specific topic) that is used
+	 * consistently for an issuer, then an en dash (“–”) can be used instead of a
+	 * reference code, to show that the coins are unlisted, for instance this
+	 * unlisted 20 Batzen coin in the Hofer catalogue. All other coins of the
+	 * Helvetic Republic have a Hofer reference.
+	 *
+	 * Similar reference
+	 * If a coin type is absent from a catalog, the similarity to another type in
+	 * that catalog can be indicated by “var.” after the code.
+	 */
 
-// private Mono<Void> linkCatalogueReferencesToNType(List<CatalogueReference>
-// catalogueReferences,
-// NumistaPage numistaPage) {
-// if (numistaPage.nType == null || catalogueReferences.isEmpty()) {
-// return Mono.empty();
-// }
+	// public Mono<Boolean> parseCataloguesByCode(String code, ColligendisUser
+	// colligendisUser) {
+	// if (code == null || code.isEmpty()) {
+	// return Mono.just(false);
+	// }
+	// final String normalizedCode = Normalizer.normalize(code, Normalizer.Form.NFD)
+	// .replaceAll("[^\\p{ASCII}]", "")
+	// .replace(" ", "%20");
 
-// return getNTypeService()
-// .setCatalogueReferences(numistaPage.nType, catalogueReferences,
-// numistaPage.colligendisUser)
-// .then(Mono.empty());
-// }
+	// String url = CATALOGUE_SEARCH + normalizedCode;
+	// return Mono.fromCallable(() -> NumistaParseUtils.loadPageByURL(url))
+	// .flatMap(doc -> {
+	// if (doc == null) {
+	// log.error("Can't load PHP CatalogueSearch from URL: {}", url);
+	// return Mono.just(false);
+	// }
 
-// private Mono<CatalogueReference> processReference(
-// ReferenceToCatalogue ref, NumistaPage numistaPage) {
-// // Step 1: Try to find existing catalogue reference
-// return
-// getCatalogueReferenceService().findByNumberAndCatalogueCode(ref.number,
-// ref.catalogueCode)
-// .flatMap(catalogueReferenceResult -> catalogueReferenceResult.fold(
-// // Not found, proceed to create
-// error -> {
-// if (error instanceof NotFoundError) {
-// return getCatalogueService().findByCode(ref.catalogueCode)
-// .flatMap(catalogueEither -> catalogueEither.fold(
-// catalogueError -> {
-// if (catalogueError instanceof NotFoundError) {
-// if (log.isErrorEnabled()) {
-// log.error(
-// "nid: {}{}{} - Error finding catalogue while 'handleEntityNotFound' :
-// catalogue code: {}{}{} - error: {}{}{}",
-// ANSI_BLUE, numistaPage.nid, ANSI_RESET,
-// ANSI_BLUE, ref.catalogueCode, ANSI_RESET,
-// ANSI_RED, error.message(), ANSI_RESET);
-// }
-// }
-// return Mono.empty();
-// },
-// catalogue -> getCatalogueReferenceService()
-// .create(ref.number, catalogue, numistaPage.colligendisUser)
-// .flatMap(createResult -> createResult.fold(
-// createError -> Mono.empty(),
-// Mono::just))));
-// }
-// return Mono.empty();
-// },
-// // Found, return it
-// catalogueReference -> Mono.just(catalogueReference)));
-// }
+	// Element body = doc.selectFirst("body");
+	// String jsonRefs = body.text().replace("\\r\\n", "").replace("<\\/em>", "");
+	// Gson gson = new Gson();
+	// ReferencedCatalogue[] referencedCatalogues = gson.fromJson(jsonRefs,
+	// ReferencedCatalogue[].class);
+	// return processCatalogues(referencedCatalogues, colligendisUser);
+	// });
+	// }
 
-// public static final String CATALOGUE_SEARCH =
-// "https://en.numista.com/catalogue/search_catalogues.php?q=";
+	// private Mono<Boolean> processCatalogues(ReferencedCatalogue[]
+	// referencedCatalogues, ColligendisUser user) {
+	// return Flux.fromArray(referencedCatalogues)
+	// .flatMap(referencedCatalogue -> {
+	// return getCatalogueService().findByNidWithSave(referencedCatalogue.id,
+	// referencedCatalogue.text,
+	// user);
+	// })
+	// .all(catalogue -> catalogue.isRight());
+	// }
 
-// /*
-// * References
-// * Last update: 26 September 2024
-// *
-// * The field specifies the alphanumeric code that identifies the coin type in
-// a
-// * reference catalogue. Up to ten references can be specified (if some
-// reference
-// * catalogues are missing, you can request their addition to the database). If
-// * more references exist for a coin, the additional ones may be added in the
-// * comments section.
-// *
-// * Order of references
-// * When possible, the same sequence of references should be used for all the
-// * coin types of an issuer. Newer, more authoritative, and more exhaustive
-// * standard references should appear first.
-// *
-// * What if same entry on Numista is linked to multiple reference numbers in
-// the
-// * same catalogue?
-// * If a coin type has more than one code in a reference catalogue, always add
-// * the first one (or the most relevant). The same reference catalogue may be
-// * added in a new line for recording multiple codes, provided you did not
-// reach
-// * the maximum number of references.
-// *
-// * Missing coin in a catalogue
-// * If only a small number of coins are missing from a standard monograph
-// * (reference catalogue dedicated to a very specific topic) that is used
-// * consistently for an issuer, then an en dash (“–”) can be used instead of a
-// * reference code, to show that the coins are unlisted, for instance this
-// * unlisted 20 Batzen coin in the Hofer catalogue. All other coins of the
-// * Helvetic Republic have a Hofer reference.
-// *
-// * Similar reference
-// * If a coin type is absent from a catalog, the similarity to another type in
-// * that catalog can be indicated by “var.” after the code.
-// */
+}
 
-// public Mono<Boolean> parseCataloguesByCode(String code, ColligendisUser
-// colligendisUser) {
-// if (code == null || code.isEmpty()) {
-// return Mono.just(false);
-// }
-// final String normalizedCode = Normalizer.normalize(code, Normalizer.Form.NFD)
-// .replaceAll("[^\\p{ASCII}]", "")
-// .replace(" ", "%20");
+@Data
+@AllArgsConstructor
+class ReferenceToCatalogue {
+	String catalogueNid;
+	String catalogueCode;
+	String number;
 
-// String url = CATALOGUE_SEARCH + normalizedCode;
-// return Mono.fromCallable(() -> NumistaParseUtils.loadPageByURL(url))
-// .flatMap(doc -> {
-// if (doc == null) {
-// log.error("Can't load PHP CatalogueSearch from URL: {}", url);
-// return Mono.just(false);
-// }
+}
 
-// Element body = doc.selectFirst("body");
-// String jsonRefs = body.text().replace("\\r\\n", "").replace("<\\/em>", "");
-// Gson gson = new Gson();
-// ReferencedCatalogue[] referencedCatalogues = gson.fromJson(jsonRefs,
-// ReferencedCatalogue[].class);
-// return processCatalogues(referencedCatalogues, colligendisUser);
-// });
-// }
-
-// private Mono<Boolean> processCatalogues(ReferencedCatalogue[]
-// referencedCatalogues, ColligendisUser user) {
-// return Flux.fromArray(referencedCatalogues)
-// .flatMap(referencedCatalogue -> {
-// return getCatalogueService().findByNidWithSave(referencedCatalogue.id,
-// referencedCatalogue.text,
-// user);
-// })
-// .all(catalogue -> catalogue.isRight());
-// }
-
-// }
-
-// @Data
-// @AllArgsConstructor
-// class ReferenceToCatalogue {
-// String catalogueNid;
-// String catalogueCode;
-// String number;
-
-// }
-
-// @Data
-// @AllArgsConstructor
-// class ReferencedCatalogue {
-// String id;
-// String text;
-// String bibliography;
-// }
+@Data
+@AllArgsConstructor
+class ReferencedCatalogue {
+	String id;
+	String text;
+	String bibliography;
+}

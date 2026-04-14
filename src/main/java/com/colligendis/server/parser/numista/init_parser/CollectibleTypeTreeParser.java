@@ -10,7 +10,6 @@ import org.springframework.stereotype.Component;
 
 import com.colligendis.server.parser.numista.NumistaParseUtils;
 import com.colligendis.server.database.ColligendisUserService;
-import com.colligendis.server.database.ExecutionStatus;
 import com.colligendis.server.database.numista.model.CollectibleType;
 import com.colligendis.server.database.numista.service.CollectibleTypeService;
 import com.colligendis.server.logger.BaseLogger;
@@ -132,14 +131,11 @@ public class CollectibleTypeTreeParser {
 			final String finalCode = code;
 			return collectibleTypeService.findByCode(code, collectibleTypeTreeParserLogger)
 					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
-							return Mono.just(executionResult.getNode());
-						} else if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_NOT_FOUND)) {
-							return Mono.empty();
-						} else {
-							log.error("Failed to find CollectibleType: {}", executionResult.getStatus());
-							executionResult.logError(collectibleTypeTreeParserLogger);
-							return Mono.empty();
+						switch (executionResult.getStatus()) {
+							case FOUND:
+								return Mono.just(executionResult.getNode());
+							default:
+								return Mono.empty();
 						}
 					}).switchIfEmpty(Mono.defer(() -> {
 						CollectibleType node = new CollectibleType();
@@ -148,13 +144,12 @@ public class CollectibleTypeTreeParser {
 						return collectibleTypeService.create(node, colligendisUserService.getNumistaParserUserMono(),
 								collectibleTypeTreeParserLogger)
 								.flatMap(er -> {
-									if (ExecutionStatus.NODE_WAS_CREATED.equals(er.getStatus())
-											&& er.getNode() != null) {
-										return Mono.just(er.getNode());
+									switch (er.getStatus()) {
+										case WAS_CREATED:
+											return Mono.just(er.getNode());
+										default:
+											return Mono.empty();
 									}
-									log.error("Failed to create CollectibleType: {}", er.getStatus());
-									er.logError(collectibleTypeTreeParserLogger);
-									return Mono.empty();
 								});
 					}));
 

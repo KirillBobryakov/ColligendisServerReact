@@ -1,5 +1,6 @@
-package com.colligendis.server.database;
+package com.colligendis.server.database.result;
 
+import com.colligendis.server.database.AbstractNode;
 import com.colligendis.server.database.exception.DatabaseError;
 import com.colligendis.server.logger.BaseLogger;
 
@@ -8,13 +9,13 @@ import lombok.Data;
 
 @Data
 @AllArgsConstructor
-public class ExecutionResult<T extends AbstractNode> {
+public class ExecutionResult<T extends AbstractNode, S extends ExecutionStatuses> {
 
 	private T node;
-	private ExecutionStatus status;
+	private S status;
 	private DatabaseError error;
 
-	public static <T extends AbstractNode> Builder<T> builder() {
+	public static <T extends AbstractNode, S extends ExecutionStatuses> Builder<T, S> builder() {
 		return new Builder<>();
 	}
 
@@ -28,28 +29,28 @@ public class ExecutionResult<T extends AbstractNode> {
 		}
 	}
 
-	public static class Builder<T extends AbstractNode> {
+	public static class Builder<T extends AbstractNode, S extends ExecutionStatuses> {
 		private T node;
-		private ExecutionStatus status;
+		private S status;
 		private DatabaseError error;
 
-		public Builder<T> node(T node) {
+		public Builder<T, S> node(T node) {
 			this.node = node;
 			return this;
 		}
 
-		public Builder<T> error(DatabaseError error) {
-			this.status = ExecutionStatus.ERROR;
+		public Builder<T, S> error(DatabaseError error, S status) {
+			this.status = status;
 			this.error = error;
 			return this;
 		}
 
-		public Builder<T> status(ExecutionStatus status) {
+		public Builder<T, S> status(S status) {
 			this.status = status;
 			return this;
 		}
 
-		public ExecutionResult<T> build() {
+		public ExecutionResult<T, S> build() {
 			return new ExecutionResult<>(node, status, error);
 		}
 	}

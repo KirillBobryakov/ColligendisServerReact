@@ -3,7 +3,6 @@ package com.colligendis.server.parser.numista;
 import org.jsoup.nodes.Element;
 import org.springframework.stereotype.Component;
 
-import com.colligendis.server.database.ExecutionStatus;
 import com.colligendis.server.database.numista.model.CollectibleType;
 import com.colligendis.server.database.numista.service.CollectibleTypeService;
 import com.colligendis.server.database.numista.service.NTypeService;
@@ -58,14 +57,14 @@ public class CollectibleTypeParser extends Parser {
 
 			return collectibleTypeService.findByCode(collectibleTypeCode, numistaPage.getPipelineStepLogger())
 					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
-							return Mono.just(executionResult.getNode());
-						} else {
-							numistaPage.getPipelineStepLogger().error("Failed to find CollectibleType: {}",
-									executionResult.getStatus());
-							executionResult.logError(numistaPage.getPipelineStepLogger());
-							return Mono.error(
-									new ParserException("Failed to find CollectibleType: " + collectibleTypeCode));
+						switch (executionResult.getStatus()) {
+							case FOUND:
+								return Mono.just(executionResult.getNode());
+							default:
+								numistaPage.getPipelineStepLogger().error("Failed to find CollectibleType: {}",
+										executionResult.getStatus());
+								return Mono.error(
+										new ParserException("Failed to find CollectibleType: " + collectibleTypeCode));
 						}
 					})
 					.flatMap(foundCollectibleType -> linkCollectibleTypeToNType(foundCollectibleType,
@@ -89,28 +88,26 @@ public class CollectibleTypeParser extends Parser {
 		return nTypeService.setCollectibleType(numistaPage.nType, collectibleType,
 				numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger())
 				.flatMap(executionResult -> {
-					if (executionResult.getStatus().equals(ExecutionStatus.RELATIONSHIP_IS_EXISTS)) {
-						numistaPage.getPipelineStepLogger().info(
-								"CollectibleType: {}", collectibleType.getName());
-						numistaPage.collectibleType = collectibleType;
-						return Mono.just(numistaPage);
+					switch (executionResult.getStatus()) {
+						case IS_ALREADY_EXISTS:
+							numistaPage.getPipelineStepLogger().info(
+									"CollectibleType: {}", collectibleType.getName());
+							numistaPage.collectibleType = collectibleType;
+							return Mono.just(numistaPage);
+						case WAS_CREATED:
+							numistaPage.getPipelineStepLogger().warning(
+									"CollectibleType: set to {}", collectibleType.getName());
+							numistaPage.collectibleType = collectibleType;
+							return Mono.just(numistaPage);
+						default:
+							numistaPage.getPipelineStepLogger().error(
+									"Error while setting relationship between NType and CollectibleType for nid: {} and collectible type name: {} - Error: {}",
+									numistaPage.nid,
+									collectibleType.getName(),
+									executionResult.getStatus());
+							return Mono.error(
+									new ParserException("Error setting CollectibleType: " + collectibleTypeCode));
 					}
-					if (!executionResult.getStatus().equals(ExecutionStatus.RELATIONSHIP_WAS_CREATED)) {
-						numistaPage.getPipelineStepLogger().error(
-								"CollectibleType error while setting relationship between NType and CollectibleType for nid: {} and collectible type name: {} - Error: {}",
-								numistaPage.nid,
-								collectibleType.getName(),
-								executionResult.getStatus());
-						return Mono.error(new ParserException("Error setting CollectibleType: " + collectibleTypeCode));
-					}
-
-					numistaPage.getPipelineStepLogger().warning(
-							"CollectibleType: set to {}",
-							collectibleType.getName());
-
-					numistaPage.collectibleType = collectibleType;
-
-					return Mono.just(numistaPage);
 				});
 	}
 

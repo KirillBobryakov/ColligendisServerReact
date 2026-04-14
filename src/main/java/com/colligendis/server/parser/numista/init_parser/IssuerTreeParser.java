@@ -14,13 +14,13 @@ import org.springframework.stereotype.Component;
 
 import com.colligendis.server.database.AbstractNode;
 import com.colligendis.server.database.ColligendisUserService;
-import com.colligendis.server.database.ExecutionStatus;
 import com.colligendis.server.database.numista.model.Country;
 import com.colligendis.server.database.numista.model.Issuer;
 import com.colligendis.server.database.numista.model.Subject;
 import com.colligendis.server.database.numista.service.CountryService;
 import com.colligendis.server.database.numista.service.IssuerService;
 import com.colligendis.server.database.numista.service.SubjectService;
+import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
 import com.colligendis.server.logger.BaseLogger;
 import com.colligendis.server.parser.numista.NumistaParseUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -83,12 +83,11 @@ public class IssuerTreeParser {
 				Mono<Country> currentCountryMono = countryService
 						.findByNumistaCode(currentIssuerJson.getId(), issuerTreeParserLogger)
 						.flatMap(executionResult -> {
-							if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
-								return Mono.just(executionResult.getNode());
-							} else {
-								log.error("Failed to find Country: {}", executionResult.getStatus());
-								executionResult.logError(issuerTreeParserLogger);
-								return Mono.empty();
+							switch (executionResult.getStatus()) {
+								case FOUND:
+									return Mono.just(executionResult.getNode());
+								default:
+									return Mono.empty();
 							}
 						})
 						.switchIfEmpty(Mono.defer(() -> {
@@ -99,13 +98,12 @@ public class IssuerTreeParser {
 									.create(node, colligendisUserService.getNumistaParserUserMono(),
 											issuerTreeParserLogger)
 									.flatMap(er -> {
-										if (ExecutionStatus.NODE_WAS_CREATED.equals(er.getStatus())
-												&& er.getNode() != null) {
-											return Mono.just(er.getNode());
+										switch (er.getStatus()) {
+											case WAS_CREATED:
+												return Mono.just(er.getNode());
+											default:
+												return Mono.empty();
 										}
-										log.error("Failed to create Country: {}", er.getStatus());
-										er.logError(issuerTreeParserLogger);
-										return Mono.empty();
 									});
 						}));
 
@@ -119,12 +117,11 @@ public class IssuerTreeParser {
 					Mono<Issuer> issuerMono = issuerService
 							.findByNumistaCode(currentIssuerJson.getId(), issuerTreeParserLogger)
 							.flatMap(executionResult -> {
-								if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
-									return Mono.just(executionResult.getNode());
-								} else {
-									log.error("Failed to find Issuer: {}", executionResult.getStatus());
-									executionResult.logError(issuerTreeParserLogger);
-									return Mono.empty();
+								switch (executionResult.getStatus()) {
+									case FOUND:
+										return Mono.just(executionResult.getNode());
+									default:
+										return Mono.empty();
 								}
 							})
 							.switchIfEmpty(Mono.defer(() -> {
@@ -135,13 +132,12 @@ public class IssuerTreeParser {
 										.create(node, colligendisUserService.getNumistaParserUserMono(),
 												issuerTreeParserLogger)
 										.flatMap(er -> {
-											if (ExecutionStatus.NODE_WAS_CREATED.equals(er.getStatus())
-													&& er.getNode() != null) {
-												return Mono.just(er.getNode());
+											switch (er.getStatus()) {
+												case WAS_CREATED:
+													return Mono.just(er.getNode());
+												default:
+													return Mono.empty();
 											}
-											log.error("Failed to create Issuer: {}", er.getStatus());
-											er.logError(issuerTreeParserLogger);
-											return Mono.empty();
 										});
 							}));
 
@@ -151,7 +147,7 @@ public class IssuerTreeParser {
 							.relateToCountry(finalIssuer, curCountry, colligendisUserService.getNumistaParserUserMono(),
 									issuerTreeParserLogger)
 							.block()
-							.equals(ExecutionStatus.RELATIONSHIP_WAS_CREATED)) {
+							.getStatus() == CreateRelationshipExecutionStatus.WAS_CREATED) {
 						log.debug(
 								"Issuer with numistaCode: {} and name: {} was relate to Country with numistaCode: {} and name: {}",
 								finalIssuer.getNumistaCode(), finalIssuer.getName(), curCountry.getNumistaCode(),
@@ -169,12 +165,11 @@ public class IssuerTreeParser {
 					Mono<Subject> subjectMono = subjectService
 							.findByNumistaCode(currentIssuerJson.getId(), issuerTreeParserLogger)
 							.flatMap(executionResult -> {
-								if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
-									return Mono.just(executionResult.getNode());
-								} else {
-									log.error("Failed to find Subject: {}", executionResult.getStatus());
-									executionResult.logError(issuerTreeParserLogger);
-									return Mono.empty();
+								switch (executionResult.getStatus()) {
+									case FOUND:
+										return Mono.just(executionResult.getNode());
+									default:
+										return Mono.empty();
 								}
 							})
 							.switchIfEmpty(Mono.defer(() -> {
@@ -185,13 +180,12 @@ public class IssuerTreeParser {
 										.create(node, colligendisUserService.getNumistaParserUserMono(),
 												issuerTreeParserLogger)
 										.flatMap(er -> {
-											if (ExecutionStatus.NODE_WAS_CREATED.equals(er.getStatus())
-													&& er.getNode() != null) {
-												return Mono.just(er.getNode());
+											switch (er.getStatus()) {
+												case WAS_CREATED:
+													return Mono.just(er.getNode());
+												default:
+													return Mono.empty();
 											}
-											log.error("Failed to create Subject: {}", er.getStatus());
-											er.logError(issuerTreeParserLogger);
-											return Mono.empty();
 										});
 							}));
 
@@ -214,12 +208,11 @@ public class IssuerTreeParser {
 					Mono<Issuer> issuerMono = issuerService
 							.findByNumistaCode(currentIssuerJson.getId(), issuerTreeParserLogger)
 							.flatMap(executionResult -> {
-								if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
-									return Mono.just(executionResult.getNode());
-								} else {
-									log.error("Failed to find Issuer: {}", executionResult.getStatus());
-									executionResult.logError(issuerTreeParserLogger);
-									return Mono.empty();
+								switch (executionResult.getStatus()) {
+									case FOUND:
+										return Mono.just(executionResult.getNode());
+									default:
+										return Mono.empty();
 								}
 							})
 							.switchIfEmpty(Mono.defer(() -> {
@@ -230,13 +223,12 @@ public class IssuerTreeParser {
 										.create(node, colligendisUserService.getNumistaParserUserMono(),
 												issuerTreeParserLogger)
 										.flatMap(er -> {
-											if (ExecutionStatus.NODE_WAS_CREATED.equals(er.getStatus())
-													&& er.getNode() != null) {
-												return Mono.just(er.getNode());
+											switch (er.getStatus()) {
+												case WAS_CREATED:
+													return Mono.just(er.getNode());
+												default:
+													return Mono.empty();
 											}
-											log.error("Failed to create Issuer: {}", er.getStatus());
-											er.logError(issuerTreeParserLogger);
-											return Mono.empty();
 										});
 							}));
 

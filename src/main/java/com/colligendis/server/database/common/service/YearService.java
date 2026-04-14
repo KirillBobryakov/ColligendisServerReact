@@ -2,6 +2,10 @@ package com.colligendis.server.database.common.service;
 
 import com.colligendis.server.database.common.model.Calendar;
 import com.colligendis.server.database.common.model.Year;
+import com.colligendis.server.database.result.CreateNodeExecutionStatus;
+import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
+import com.colligendis.server.database.result.ExecutionResult;
+import com.colligendis.server.database.result.FindExecutionStatus;
 import com.colligendis.server.logger.BaseLogger;
 
 import reactor.core.publisher.Mono;
@@ -11,8 +15,6 @@ import org.springframework.stereotype.Service;
 import com.colligendis.server.database.AbstractNode;
 import com.colligendis.server.database.AbstractService;
 import com.colligendis.server.database.ColligendisUser;
-import com.colligendis.server.database.ExecutionResult;
-import com.colligendis.server.database.ExecutionStatus;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -20,70 +22,36 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 public class YearService extends AbstractService {
 
-	public Mono<ExecutionResult<Year>> findByValueAndCalendar(Integer value, Mono<Calendar> calendarMono,
+	public Mono<ExecutionResult<Year, FindExecutionStatus>> findByValueAndCalendar(Integer value,
+			Mono<Calendar> calendarMono,
 			BaseLogger baseLogger) {
 		return calendarMono.flatMap(calendar -> super.findUniqueNodeByPropertyValueAndTargetNode("value", value,
-				Year.LABEL, Year.class, calendar, Year.TO_NUMBER_IN, baseLogger))
-				.flatMap(executionResult -> {
-					if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
-						baseLogger.trace("Year was found: {}", executionResult.getNode());
-						return Mono.just(executionResult);
-					} else if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_NOT_FOUND)) {
-						baseLogger.traceRed("Year was not found: {}", executionResult.getNode());
-						return Mono.just(executionResult);
-					} else if (executionResult.getStatus().equals(ExecutionStatus.MORE_THAN_ONE_NODE_IS_FOUND)) {
-						baseLogger.traceRed("More than one Year was found: {}", executionResult.getNode());
-						return Mono.just(executionResult);
-					} else {
-						baseLogger.traceRed("Failed to find Year: {}", executionResult.getStatus());
-						executionResult.logError(baseLogger);
-						return Mono.just(executionResult);
-					}
-				});
+				Year.LABEL, Year.class, calendar, Year.TO_NUMBER_IN, baseLogger));
 	}
 
-	public Mono<ExecutionResult<Year>> create(Year year, Mono<Calendar> calendarMono,
+	public Mono<ExecutionResult<Year, CreateNodeExecutionStatus>> create(Year year, Mono<Calendar> calendarMono,
 			Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
 		return findByValueAndCalendar(year.getValue(), calendarMono, baseLogger)
 				.flatMap(findExecutionResult -> {
-					if (findExecutionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
-						return Mono.just(findExecutionResult);
-					} else if (findExecutionResult.getStatus().equals(ExecutionStatus.NODE_IS_NOT_FOUND)) {
-						return colligendisUserMono
-								.flatMap(colligendisUser -> super.createNode(year, colligendisUser, Year.class,
-										baseLogger))
-								.flatMap(createExecutionResult -> {
-									if (createExecutionResult.getStatus().equals(ExecutionStatus.NODE_WAS_CREATED)) {
-										baseLogger.trace("Year was created: {}", createExecutionResult.getNode());
-										// After creation, set the Calendar relationship
-										return setCalendar((Year) createExecutionResult.getNode(), calendarMono,
-												colligendisUserMono, baseLogger)
-												.thenReturn(createExecutionResult);
-									} else {
-										baseLogger.traceRed("Failed to create Year: {}",
-												createExecutionResult.getStatus());
-										createExecutionResult.logError(baseLogger);
-										return Mono.just(createExecutionResult);
-									}
-								});
-					} else {
-						baseLogger.traceRed("Failed to find Year: {}", findExecutionResult.getStatus());
-						findExecutionResult.logError(baseLogger);
-						return Mono.just(findExecutionResult);
+					switch (findExecutionResult.getStatus()) {
+						case FOUND:
+							return Mono.just(ExecutionResult.<Year, CreateNodeExecutionStatus>builder()
+									.node(findExecutionResult.getNode())
+									.status(CreateNodeExecutionStatus.NODE_ALREADY_EXISTS)
+									.build());
+						case NOT_FOUND:
+							return colligendisUserMono.flatMap(
+									colligendisUser -> super.createNode(year, colligendisUser, Year.class, baseLogger));
+						default:
+							return Mono.just(ExecutionResult.<Year, CreateNodeExecutionStatus>builder()
+									.status(CreateNodeExecutionStatus.INTERNAL_ERROR)
+									.build());
 					}
 				});
-		// .switchIfEmpty(
-		// colligendisUserMono.flatMap(user -> {
-		// Year newYear = new Year(year.getValue());
-		// return this.createNode(newYear, user, Year.class)
-		// .flatMap(either -> either.reactiveFoldOrElse(Mono::empty))
-		// .flatMap(createdYear -> setCalendar(createdYear, calendarMono,
-		// colligendisUserMono)
-		// .thenReturn(createdYear));
-		// }));
 	}
 
-	public Mono<ExecutionResult<AbstractNode>> setCalendar(Year year, Mono<Calendar> calendarMono,
+	public Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> setCalendar(Year year,
+			Mono<Calendar> calendarMono,
 			Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
 		return calendarMono.zipWhen(calendar -> colligendisUserMono)
 				.flatMap(tuple -> {
@@ -106,7 +74,7 @@ public class YearService extends AbstractService {
 		BaseLogger baseLogger = new BaseLogger();
 		return findByValueAndCalendar(value, CalendarService.GREGORIAN, baseLogger)
 				.flatMap(er -> {
-					if (ExecutionStatus.NODE_IS_FOUND.equals(er.getStatus()) && er.getNode() != null) {
+					if (FindExecutionStatus.FOUND.equals(er.getStatus()) && er.getNode() != null) {
 						return Mono.just(er.getNode());
 					}
 					return Mono.empty();
@@ -118,23 +86,37 @@ public class YearService extends AbstractService {
 		BaseLogger baseLogger = new BaseLogger();
 		return findByValueAndCalendar(value, calendarMono, baseLogger)
 				.flatMap(findEr -> {
-					if (ExecutionStatus.NODE_IS_FOUND.equals(findEr.getStatus()) && findEr.getNode() != null) {
-						return Mono.just(findEr.getNode());
+					switch (findEr.getStatus()) {
+						case FOUND:
+							return Mono.just(findEr.getNode());
+						case NOT_FOUND:
+							return create(new Year(value), calendarMono, colligendisUserMono, baseLogger)
+									.flatMap(createEr -> {
+										switch (createEr.getStatus()) {
+											case WAS_CREATED:
+												return setCalendar(createEr.getNode(), calendarMono,
+														colligendisUserMono, baseLogger)
+														.flatMap(setExResult -> {
+															switch (setExResult.getStatus()) {
+																case WAS_CREATED:
+																	baseLogger.trace("Calendar was set: {}",
+																			setExResult.getNode());
+																	return Mono.just(createEr.getNode());
+																default:
+																	return Mono.empty();
+															}
+														});
+											default:
+												baseLogger.traceRed("Failed to create Year: {}", createEr.getStatus());
+												return Mono.empty();
+										}
+									});
+						default:
+							baseLogger.traceRed("Failed to find Year: {}", findEr.getStatus());
+							return Mono.empty();
 					}
-					if (ExecutionStatus.NODE_IS_NOT_FOUND.equals(findEr.getStatus())) {
-						return create(new Year(value), calendarMono, colligendisUserMono, baseLogger)
-								.flatMap(createEr -> {
-									if (!ExecutionStatus.NODE_WAS_CREATED.equals(createEr.getStatus())
-											|| createEr.getNode() == null) {
-										return Mono.empty();
-									}
-									Year created = createEr.getNode();
-									return setCalendar(created, calendarMono, colligendisUserMono, baseLogger)
-											.thenReturn(created);
-								});
-					}
-					return Mono.empty();
 				});
+
 	}
 
 }

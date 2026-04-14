@@ -9,12 +9,16 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.springframework.stereotype.Component;
 
-import com.colligendis.server.database.ExecutionResult;
-import com.colligendis.server.database.ExecutionStatus;
+import com.colligendis.server.database.AbstractNode;
 import com.colligendis.server.database.common.model.Year;
 import com.colligendis.server.database.numista.model.Currency;
 import com.colligendis.server.database.numista.service.CurrencyService;
 import com.colligendis.server.database.numista.service.NTypeService;
+import com.colligendis.server.database.result.CreateNodeExecutionStatus;
+import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
+import com.colligendis.server.database.result.ExecutionResult;
+import com.colligendis.server.database.result.ExecutionStatuses;
+import com.colligendis.server.database.result.FindExecutionStatus;
 import com.colligendis.server.parser.PauseLock;
 import com.colligendis.server.parser.numista.exception.ParserException;
 import com.colligendis.server.parser.numista.year_parser.CirculationPeriod;
@@ -36,13 +40,13 @@ public class CurrencyParser extends Parser {
 
 	private static final String CURRENCIES_URL_PREFIX = "https://en.numista.com/catalogue/get_currencies.php?";
 
-	private final PauseLock pauseLock = new PauseLock("CurrencyParser");
+	private static final PauseLock PAUSE_LOCK = new PauseLock("CurrencyParser");
 
 	@Override
 	protected Mono<NumistaPage> parse(NumistaPage numistaPage) {
 		return Mono.defer(() -> {
 			Map<String, String> devise = NumistaParseUtils.getAttributeWithTextSingleOption(
-					numistaPage.page, "#devise", "value");
+					numistaPage, "#devise", "value");
 
 			if (devise == null) {
 				numistaPage.getPipelineStepLogger()
@@ -54,50 +58,57 @@ public class CurrencyParser extends Parser {
 
 			String currencyNid = devise.get("value");
 
-			return pauseLock.awaitIfPaused()
+			return PAUSE_LOCK.awaitIfPaused()
 					.then(currencyService.findByNid(currencyNid, numistaPage.getPipelineStepLogger()))
-					.map(ExecutionResult<Currency>::getNode)
-					.switchIfEmpty(
-							handleCurrencyNotFound(currencyNid, numistaPage))
-					.flatMap(currency -> nTypeService.setCurrency(numistaPage.nType, currency, numistaPage
-							.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger()))
 					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(ExecutionStatus.ERROR)) {
-							numistaPage.getPipelineStepLogger().error(
-									"Currency: error while setting relationship between NType and Currency for nid: {} and currency nid: {}",
-									numistaPage.nid, currencyNid);
+						if (!executionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
+							return handleCurrencyNotFound(currencyNid, numistaPage);
+						} else {
+							return Mono.just(executionResult);
 						}
-						if (executionResult.getStatus().equals(ExecutionStatus.RELATIONSHIP_IS_EXISTS)) {
-							numistaPage.getPipelineStepLogger().info(
-									"Currency: relationship between NType and Currency for nid: {} and currency nid: {} already exists",
-									numistaPage.nid, currencyNid);
+					})
+					.flatMap(executionResult -> {
+						if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)
+								|| executionResult.getStatus().equals(CreateNodeExecutionStatus.WAS_CREATED)) {
+							numistaPage.currency = executionResult.getNode();
+							return nTypeService.setCurrency(numistaPage.nType, executionResult.getNode(),
+									numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger());
+						} else {
+							executionResult.logError(numistaPage.getPipelineStepLogger());
+							return Mono.error(new ParserException(
+									"Failed to set relationship between NType and Currency for nid: " + numistaPage.nid
+											+ " and currency nid: " + currencyNid));
 						}
-						if (executionResult.getStatus().equals(ExecutionStatus.RELATIONSHIP_WAS_CREATED)) {
-							numistaPage.getPipelineStepLogger().warning(
-									"Currency: set to {}", currencyNid);
+					})
+					.flatMap(executionResult -> {
+						if (executionResult.getStatus().equals(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)
+								|| executionResult.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)) {
+							return Mono.just(numistaPage);
+						} else {
+							executionResult.logError(numistaPage.getPipelineStepLogger());
+							numistaPage.currency = null;
+							return Mono.error(new ParserException(
+									"Failed to set relationship between NType and Currency for nid: " + numistaPage.nid
+											+ " and currency nid: " + currencyNid));
 						}
-
-						return Mono.just(numistaPage);
 					});
 		});
 	}
 
-	private Mono<Currency> handleCurrencyNotFound(String currencyNid,
+	private Mono<ExecutionResult<Currency, FindExecutionStatus>> handleCurrencyNotFound(String currencyNid,
 			NumistaPage numistaPage) {
 
-		boolean acquiredLock = pauseLock.pause();
+		boolean acquiredLock = PAUSE_LOCK.pause();
 		if (!acquiredLock) {
 			// Another thread is already loading currencies - wait and retry
-			return pauseLock.awaitIfPaused()
-					.then(currencyService.findByNid(currencyNid, numistaPage.getPipelineStepLogger()))
-					.map(ExecutionResult<Currency>::getNode);
+			return PAUSE_LOCK.awaitIfPaused()
+					.then(currencyService.findByNid(currencyNid, numistaPage.getPipelineStepLogger()));
 		}
 
 		return loadAndParseCurrenciesByIssuerCodeFromPHPRequestMono(numistaPage)
 				.subscribeOn(Schedulers.boundedElastic())
-				.doFinally(signal -> pauseLock.resume())
-				.then(currencyService.findByNid(currencyNid, numistaPage.getPipelineStepLogger()))
-				.map(ExecutionResult<Currency>::getNode);
+				.doFinally(signal -> PAUSE_LOCK.resume())
+				.then(currencyService.findByNid(currencyNid, numistaPage.getPipelineStepLogger()));
 
 	}
 
@@ -127,23 +138,36 @@ public class CurrencyParser extends Parser {
 		return Flux.fromIterable(options);
 	}
 
-	private Mono<Currency> processCurrencyOption(Element option,
+	private Mono<ExecutionResult<Currency, ? extends ExecutionStatuses>> processCurrencyOption(Element option,
 			NumistaPage numistaPage) {
 		String nid = option.attr("value");
 		String fullName = extractFullName(option.text());
 		String cleanName = stripName(fullName);
 
 		return currencyService
-				.findByNidWithSave(nid, fullName, cleanName, numistaPage.getNumistaParserUserMono(),
+				.findByNidWithCreate(nid, fullName, cleanName, numistaPage.getNumistaParserUserMono(),
 						numistaPage.getPipelineStepLogger())
-				.map(ExecutionResult<Currency>::getNode)
-				.switchIfEmpty(Mono.error(new ParserException("Can't find or save currency " + nid)))
-				.flatMap(currency -> yearPeriodParserService.parsePeriods(fullName)
-						.flatMap(periods -> saveCurrencyWithPeriods(currency, periods, numistaPage)
-								.thenReturn(currency)))
-				.flatMap(currency -> currencyService.setIssuer(currency, numistaPage.issuer,
-						numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger())
-						.thenReturn(currency));
+				.flatMap(executionResult -> {
+					if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)
+							|| executionResult.getStatus().equals(CreateNodeExecutionStatus.WAS_CREATED)) {
+						return yearPeriodParserService.parsePeriods(fullName)
+								.flatMap(periods -> setYearRelationships(executionResult, periods, numistaPage));
+					} else {
+						executionResult.logError(numistaPage.getPipelineStepLogger());
+						return Mono.error(new ParserException("Failed to find or save currency " + nid));
+					}
+				})
+				.flatMap(executionResult -> {
+					if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)
+							|| executionResult.getStatus().equals(CreateNodeExecutionStatus.WAS_CREATED)) {
+						return currencyService.setIssuer(executionResult.getNode(), numistaPage.issuer,
+								numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger())
+								.thenReturn(executionResult);
+					} else {
+						executionResult.logError(numistaPage.getPipelineStepLogger());
+						return Mono.error(new ParserException("Failed to set Issuer for currency " + nid));
+					}
+				});
 	}
 
 	private String extractFullName(String text) {
@@ -157,7 +181,8 @@ public class CurrencyParser extends Parser {
 		return parenIdx > 0 ? fullName.substring(0, parenIdx).trim() : fullName.trim();
 	}
 
-	private Mono<Currency> setYearRelationships(Currency currency,
+	private Mono<ExecutionResult<Currency, ? extends ExecutionStatuses>> setYearRelationships(
+			ExecutionResult<Currency, ? extends ExecutionStatuses> currency,
 			CirculationPeriods periods,
 			NumistaPage numistaPage) {
 		List<Year> fromYears = periods.periods().stream()
@@ -172,31 +197,58 @@ public class CurrencyParser extends Parser {
 				.map(Optional::get)
 				.toList();
 
-		Mono<Void> setFrom = fromYears.isEmpty()
+		Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> setFrom = fromYears.isEmpty()
 				? Mono.empty()
-				: currencyService.setCirculatedFromYears(currency, fromYears,
-						numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger()).then();
+				: currencyService.setCirculatedFromYears(currency.getNode(), fromYears,
+						numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger());
 
-		Mono<Void> setTill = tillYears.isEmpty()
+		Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> setTill = tillYears.isEmpty()
 				? Mono.empty()
-				: currencyService.setCirculatedTillYears(currency, tillYears,
-						numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger()).then();
+				: currencyService.setCirculatedTillYears(currency.getNode(), tillYears,
+						numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger());
 
-		return setFrom.then(setTill).thenReturn(currency);
+		return setFrom
+				.flatMap(setFromExecutionResult -> {
+					switch (setFromExecutionResult.getStatus()) {
+						case WAS_CREATED:
+							numistaPage.getPipelineStepLogger()
+									.info("Circulated From Years set for currency " + currency.getNode().getNid());
+							return Mono.empty();
+						default:
+							numistaPage.getPipelineStepLogger().error(
+									"Failed to set Circulated From Years for currency " + currency.getNode().getNid());
+							return Mono.error(new ParserException(
+									"Failed to set Circulated From Years for currency " + currency.getNode().getNid()));
+					}
+				})
+				.then(setTill).flatMap(setTillExecutionResult -> {
+					switch (setTillExecutionResult.getStatus()) {
+						case WAS_CREATED:
+							numistaPage.getPipelineStepLogger()
+									.info("Circulated Till Years set for currency " + currency.getNode().getNid());
+							return Mono.empty();
+						default:
+							numistaPage.getPipelineStepLogger().error(
+									"Failed to set Circulated Till Years for currency " + currency.getNode().getNid());
+							return Mono.error(new ParserException(
+									"Failed to set Circulated Till Years for currency " + currency.getNode().getNid()));
+					}
+				})
+				.thenReturn(currency);
 	}
 
-	private Mono<Currency> saveCurrencyWithPeriods(Currency currency,
-			CirculationPeriods periods,
-			NumistaPage numistaPage) {
+	// private Mono<ExecutionResult<Currency>>
+	// saveCurrencyWithPeriods(ExecutionResult<Currency> currency,
+	// CirculationPeriods periods,
+	// NumistaPage numistaPage) {
 
-		return currencyService
-				.update(currency, numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger())
-				.map(ExecutionResult<Currency>::getNode)
-				.defaultIfEmpty(currency)
-				.flatMap(updated -> {
-					Currency cur = updated != null ? updated : currency;
-					return setYearRelationships(cur, periods, numistaPage);
-				});
-	}
+	// return currencyService
+	// .update(currency.getNode(), numistaPage.getNumistaParserUserMono(),
+	// numistaPage.getPipelineStepLogger())
+	// .flatMap(updated -> {
+	// Currency cur = updated != null ? updated : currency;
+	// return setYearRelationships(cur, periods, numistaPage);
+	// });
+	// }
 
 }

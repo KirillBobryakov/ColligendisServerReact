@@ -7,10 +7,11 @@ import org.springframework.stereotype.Service;
 import com.colligendis.server.database.AbstractNode;
 import com.colligendis.server.database.AbstractService;
 import com.colligendis.server.database.ColligendisUser;
-import com.colligendis.server.database.ExecutionResult;
-import com.colligendis.server.database.ExecutionStatus;
 import com.colligendis.server.database.numista.model.Catalogue;
 import com.colligendis.server.database.numista.model.CatalogueReference;
+import com.colligendis.server.database.result.ExecutionResult;
+import com.colligendis.server.database.result.ExecutionStatuses;
+import com.colligendis.server.database.result.FindExecutionStatus;
 import com.colligendis.server.logger.BaseLogger;
 
 import lombok.extern.slf4j.Slf4j;
@@ -20,80 +21,91 @@ import reactor.core.publisher.Mono;
 @Slf4j
 public class CatalogueReferenceService extends AbstractService {
 
-	public Mono<ExecutionResult<CatalogueReference>> create(String number, Catalogue catalogue,
+	public Mono<? extends ExecutionResult<? extends AbstractNode, ? extends ExecutionStatuses>> create(String number,
+			Catalogue catalogue,
 			Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
 		return colligendisUserMono
 				.flatMap(colligendisUser -> super.createNode(new CatalogueReference(number), colligendisUser,
 						CatalogueReference.class, baseLogger))
 				.flatMap(executionResult -> {
-					if (executionResult.getStatus().equals(ExecutionStatus.NODE_WAS_CREATED)) {
-						baseLogger.trace("CatalogueReference was created: {}", executionResult.getNode());
-						return Mono.just(executionResult);
-					} else if (executionResult.getStatus().equals(ExecutionStatus.NODE_NOT_CREATED)) {
-						baseLogger.traceRed("CatalogueReference was not created: {}", executionResult.getNode());
-						return Mono.just(executionResult);
-					} else {
-						baseLogger.traceRed("Failed to create CatalogueReference: {}", executionResult.getStatus());
-						executionResult.logError(baseLogger);
-						return Mono.just(executionResult);
+					switch (executionResult.getStatus()) {
+						case WAS_CREATED:
+							return colligendisUserMono.flatMap(
+									colligendisUser -> super.createUniqueTargetedRelationship(executionResult.getNode(),
+											catalogue,
+											CatalogueReference.REFERENCE_FROM, colligendisUser, baseLogger));
+						default:
+							return Mono.just(executionResult);
+
 					}
 				});
 	}
 
-	public Mono<ExecutionResult<CatalogueReference>> findByNumberAndCatalogueCode(String number,
+	public Mono<ExecutionResult<CatalogueReference, ? extends FindExecutionStatus>> findByNumberAndCatalogueCode(
+			String number,
 			String catalogueCode, BaseLogger baseLogger) {
 		return Mono.defer(() -> {
 			String query = """
 							MATCH (n:CATALOGUE_REFERENCE)-[:REFERENCE_FROM]->(c:CATALOGUE)
-							WHERE n.number = $number AND c.code = $catalogueCode
-							RETURN n AS resultNode,
-							CASE
-								WHEN n IS NULL THEN 'NODE_IS_NOT_FOUND'
-								ELSE 'NODE_IS_FOUND'
-							END AS status
+								WHERE n.number = $number AND c.code = $catalogueCode
+
+							WITH collect(n) AS nodes
+
+							RETURN
+								CASE
+									WHEN size(nodes) = 0 THEN NULL
+									ELSE nodes[0]
+								END AS resultNode,
+
+								CASE
+									WHEN size(nodes) = 0 THEN 'NOT_FOUND'
+									WHEN size(nodes) = 1 THEN 'FOUND'
+									ELSE 'MORE_THAN_ONE_FOUND'
+								END AS status
 					""";
 			Map<String, Object> parameters = Map.of("number", number, "catalogueCode", catalogueCode);
 
 			return super.executeReadMono(query, parameters,
-					recordToNodeAndStatusMapper(CatalogueReference.class, baseLogger), "CatalogueReference not found",
+					recordToNodeAndStatusMapper(CatalogueReference.class, FindExecutionStatus::valueOf, baseLogger),
+					"CatalogueReference not found",
 					"Error while finding CatalogueReference by number and catalogueCode", baseLogger)
 					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
-							return Mono.just(executionResult);
-						} else if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_NOT_FOUND)) {
-							baseLogger.traceRed("CatalogueReference was not found: {}", executionResult.getNode());
-							return Mono.just(executionResult);
-						} else {
-							baseLogger.traceRed("Failed to find CatalogueReference: {}", executionResult.getStatus());
-							executionResult.logError(baseLogger);
-							return Mono.just(executionResult);
+						switch (executionResult.getStatus()) {
+							case EMPTY_RESULT:
+								baseLogger.traceRed(
+										"Empty result while finding CatalogueReference by number: {} and catalogueCode: {}",
+										number, catalogueCode);
+								return Mono.just(executionResult);
+							case INTERNAL_ERROR:
+								baseLogger.traceRed(
+										"Internal error while finding CatalogueReference by number: {} and catalogueCode: {}",
+										number, catalogueCode);
+								return Mono.just(executionResult);
+							case INPUT_PARAMETERS_ERROR:
+								baseLogger.traceRed(
+										"Input parameters error while finding CatalogueReference by number: {} and catalogueCode: {}",
+										number, catalogueCode);
+								return Mono.just(executionResult);
+							case FOUND:
+								baseLogger.traceGreen(
+										"CatalogueReference found by number: {} and catalogueCode: {}",
+										number, catalogueCode);
+								return Mono.just(executionResult);
+							case NOT_FOUND:
+								baseLogger.traceOrange(
+										"CatalogueReference not found by number: {} and catalogueCode: {}",
+										number, catalogueCode);
+								return Mono.just(executionResult);
+							case MORE_THAN_ONE_FOUND:
+								baseLogger.traceRed(
+										"More than one CatalogueReference found by number: {} and catalogueCode: {}",
+										number, catalogueCode);
+								return Mono.just(executionResult);
 						}
+						return Mono.just(executionResult);
 					});
 		});
 
 	}
 
-	public Mono<ExecutionResult<AbstractNode>> createReferenceToCatalogue(
-			CatalogueReference catalogueReference, Catalogue catalogue, Mono<ColligendisUser> colligendisUserMono,
-			BaseLogger baseLogger) {
-		return colligendisUserMono
-				.flatMap(colligendisUser -> super.createUniqueTargetedRelationship(catalogueReference, catalogue,
-						CatalogueReference.REFERENCE_FROM, colligendisUser, baseLogger))
-				.flatMap(executionResult -> {
-					if (executionResult.getStatus().equals(ExecutionStatus.RELATIONSHIP_WAS_CREATED)) {
-						baseLogger.trace("Relationship from CatalogueReference to Catalogue was created: {}",
-								executionResult.getNode());
-						return Mono.just(executionResult);
-					} else if (executionResult.getStatus().equals(ExecutionStatus.RELATIONSHIP_IS_NOT_EXISTS)) {
-						baseLogger.traceRed("Relationship from CatalogueReference to Catalogue was not created: {}",
-								executionResult.getNode());
-						return Mono.just(executionResult);
-					} else {
-						baseLogger.traceRed("Failed to create relationship from CatalogueReference to Catalogue: {}",
-								executionResult.getStatus());
-						executionResult.logError(baseLogger);
-						return Mono.just(executionResult);
-					}
-				});
-	}
 }

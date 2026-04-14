@@ -4,14 +4,15 @@ import org.jsoup.nodes.Document;
 
 import com.colligendis.server.database.ColligendisUser;
 import com.colligendis.server.database.ColligendisUserService;
-import com.colligendis.server.database.ExecutionStatus;
-import com.colligendis.server.database.exception.DatabaseException;
 import com.colligendis.server.database.numista.model.CollectibleType;
 import com.colligendis.server.database.numista.model.Currency;
 import com.colligendis.server.database.numista.model.Denomination;
 import com.colligendis.server.database.numista.model.Issuer;
 import com.colligendis.server.database.numista.model.NType;
 import com.colligendis.server.database.numista.service.NTypeService;
+import com.colligendis.server.database.result.CreateNodeExecutionStatus;
+import com.colligendis.server.database.result.FindExecutionStatus;
+import com.colligendis.server.database.result.UpdateExecutionStatus;
 import com.colligendis.server.logger.BaseLogger;
 import com.colligendis.server.parser.ParsingStatus;
 import com.colligendis.server.parser.numista.exception.ParserException;
@@ -43,10 +44,8 @@ public class NumistaPage {
 	public NType nType = null;
 
 	public CollectibleType collectibleType = null;
-	public Mono<Either<DatabaseException, CollectibleType>> collectibleTypeMono = null;
 
 	public Issuer issuer = null;
-	public Mono<Either<DatabaseException, Issuer>> issuerMono = null;
 
 	public Currency currency = null;
 	public Denomination denomination = null;
@@ -75,15 +74,15 @@ public class NumistaPage {
 		return Mono.defer(() -> {
 			return nTypeService.findByNid(nid, pipelineStepLogger)
 					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
+						if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
 							this.nType = executionResult.getNode();
 							return Mono.just(this);
-						} else if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_NOT_FOUND)) {
+						} else if (executionResult.getStatus().equals(FindExecutionStatus.NOT_FOUND)) {
 							pipelineStepLogger.warning("NType: (nid: {}) was creating", nid);
 							return nTypeService.create(new NType(nid), getNumistaParserUserMono(), pipelineStepLogger)
 									.flatMap(createdExecutionResult -> {
 										if (createdExecutionResult.getStatus()
-												.equals(ExecutionStatus.NODE_WAS_CREATED)) {
+												.equals(CreateNodeExecutionStatus.WAS_CREATED)) {
 											this.nType = createdExecutionResult.getNode();
 											pipelineStepLogger.info("NType created successfully with nid: {}", nid);
 											return Mono.just(this);
@@ -112,15 +111,16 @@ public class NumistaPage {
 			}
 			return nTypeService.update(nType, getNumistaParserUserMono(), pipelineStepLogger)
 					.flatMap(updatedExecutionResult -> {
-						if (updatedExecutionResult.getStatus().equals(ExecutionStatus.NODE_WAS_UPDATED)) {
+						if (updatedExecutionResult.getStatus().equals(UpdateExecutionStatus.WAS_UPDATED)) {
 							pipelineStepLogger.info("NType updated successfully with nid: {}", nid);
 							return Mono.just(this);
-						} else if (updatedExecutionResult.getStatus().equals(ExecutionStatus.NODE_IS_NOT_FOUND)) {
+						} else if (updatedExecutionResult.getStatus().equals(UpdateExecutionStatus.NOT_FOUND)) {
 							pipelineStepLogger.error("NType not found with nid: {}", nid);
 							updatedExecutionResult.logError(pipelineStepLogger);
 							return Mono.error(new ParserException(
 									"NType not found with nid: " + nid + " - " + updatedExecutionResult.getStatus()));
-						} else if (updatedExecutionResult.getStatus().equals(ExecutionStatus.NODE_NOTHING_TO_UPDATE)) {
+						} else if (updatedExecutionResult.getStatus()
+								.equals(UpdateExecutionStatus.NOTHING_TO_UPDATE)) {
 							pipelineStepLogger.info("NType has no properties to update with nid: {}", nid);
 							return Mono.just(this);
 						} else {

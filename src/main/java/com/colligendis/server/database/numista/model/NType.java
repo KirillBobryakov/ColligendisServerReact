@@ -124,4 +124,25 @@ public class NType extends AbstractNode {
 
 	private String alignment;
 
+	public static final String HAS_OBVERSE = "HAS_OBVERSE";
+	private NTypePart obverse;
+
+	public static final String HAS_REVERSE = "HAS_REVERSE";
+	private NTypePart reverse;
+
+	public static final String HAS_EDGE = "HAS_EDGE";
+	private NTypePart edge;
+
+	public static final String HAS_SPECIFIED_MINT = "HAS_SPECIFIED_MINT";
+	private List<SpecifiedMint> specifiedMints = new ArrayList<>();
+
+	public static final String HAS_WATERMARK = "HAS_WATERMARK";
+	private NTypePart watermark;
+
+	public static final String PRINTED_BY = "PRINTED_BY";
+	private List<Printer> printers = new ArrayList<>();
+
+	public static final String HAS_VARIANT = "HAS_VARIANT";
+	private List<Variant> variants = new ArrayList<>();
+
 }

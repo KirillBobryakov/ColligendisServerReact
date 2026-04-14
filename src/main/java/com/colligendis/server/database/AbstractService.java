@@ -20,7 +20,18 @@ import org.springframework.stereotype.Service;
 import jakarta.annotation.PostConstruct;
 
 import com.colligendis.server.database.exception.AbstractServiceError;
-import com.colligendis.server.database.exception.DatabaseError;
+import com.colligendis.server.database.result.CreateNodeExecutionStatus;
+import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
+import com.colligendis.server.database.result.DeleteExecutionStatus;
+import com.colligendis.server.database.result.ExecutionResult;
+import com.colligendis.server.database.result.ExecutionStatuses;
+import com.colligendis.server.database.result.FindExecutionStatus;
+import com.colligendis.server.database.result.ExistsExecutionStatus;
+import com.colligendis.server.database.result.ReadExecutionStatus;
+import com.colligendis.server.database.result.ReadExecutionStatuses;
+import com.colligendis.server.database.result.UpdateExecutionStatus;
+import com.colligendis.server.database.result.WriteExecutionStatus;
+import com.colligendis.server.database.result.WriteExecutionStatuses;
 import com.colligendis.server.logger.BaseLogger;
 
 import reactor.core.publisher.Flux;
@@ -62,10 +73,11 @@ public abstract class AbstractService {
 		return driver.session(sessionConfig);
 	}
 
-	protected <T extends AbstractNode> Mono<ExecutionResult<T>> mapResultToExecutionResult(Record record,
+	protected <T extends AbstractNode, S extends ExecutionStatuses> Mono<ExecutionResult<T, S>> mapResultToExecutionResult(
+			Record record,
 			Class<T> nodeClass, BaseLogger baseLogger) {
 
-		return Mono.just(ExecutionResult.<T>builder()
+		return Mono.just(ExecutionResult.<T, S>builder()
 				.node(mapRecordToNode(record, nodeClass, baseLogger))
 				.build());
 	}
@@ -95,12 +107,12 @@ public abstract class AbstractService {
 	 * (execution status) field
 	 * to an {@link ExecutionResult} with the given node class and execution status.
 	 */
-	protected <N extends AbstractNode> Function<Record, ExecutionResult<N>> recordToNodeAndStatusMapper(
-			Class<N> nodeClass, BaseLogger baseLogger) {
+	protected <N extends AbstractNode, S extends ExecutionStatuses> Function<Record, ExecutionResult<N, S>> recordToNodeAndStatusMapper(
+			Class<N> nodeClass, Function<String, S> statusResolver, BaseLogger baseLogger) {
 		return (record) -> {
 			try {
 				N node = null;
-				ExecutionStatus status = ExecutionStatus.UNKNOWN;
+				S status = null;
 
 				// Try to map result if present and not null
 				if (record.containsKey("resultNode") && !record.get("resultNode").isNull()) {
@@ -122,8 +134,8 @@ public abstract class AbstractService {
 										+ ": " + e.getMessage(),
 								Map.of("nodeClass", nodeClass.getName(), "error", e.getClass().getName()),
 								e.getStackTrace(), e);
-						return ExecutionResult.<N>builder()
-								.error(error)
+						return ExecutionResult.<N, S>builder()
+								.error(error, status)
 								.build();
 					}
 				}
@@ -133,7 +145,7 @@ public abstract class AbstractService {
 					try {
 						String statusStr = record.get("status").asString(null);
 						if (statusStr != null) {
-							status = ExecutionStatus.valueOf(statusStr);
+							status = statusResolver.apply(statusStr);
 						}
 					} catch (Exception e) {
 						baseLogger.traceOrange("Unrecognized 'status' in Neo4j record: {}",
@@ -142,11 +154,12 @@ public abstract class AbstractService {
 					}
 				}
 
-				return ExecutionResult.<N>builder()
+				return ExecutionResult.<N, S>builder()
 						.node(node)
 						.status(status)
 						.build();
 			} catch (RuntimeException e) {
+				S status = null;
 				baseLogger.traceRed("Failed to map Neo4j record (resultNode + status) to {}: {}",
 						nodeClass.getSimpleName(),
 						e.getMessage(), e);
@@ -156,8 +169,8 @@ public abstract class AbstractService {
 								+ ": " + e.getMessage(),
 						Map.of("nodeClass", nodeClass.getName(), "error", e.getClass().getName()),
 						e.getStackTrace(), e);
-				return ExecutionResult.<N>builder()
-						.error(error)
+				return ExecutionResult.<N, S>builder()
+						.error(error, status)
 						.build();
 			}
 		};
@@ -167,17 +180,18 @@ public abstract class AbstractService {
 	 * Maps a Neo4j {@code Record} containing a "status" (execution status) field
 	 * to an {@link ExecutionResult} with the execution status.
 	 */
-	protected Function<Record, ExecutionResult<AbstractNode>> recordToStatusMapper(BaseLogger baseLogger) {
+	protected <S extends ExecutionStatuses> Function<Record, ExecutionResult<AbstractNode, S>> recordToStatusMapper(
+			Function<String, S> statusResolver, BaseLogger baseLogger) {
 		return (record) -> {
 			try {
-				ExecutionStatus status = ExecutionStatus.UNKNOWN;
+				S status = null;
 
 				// Try to map status if present
 				if (record.containsKey("status") && !record.get("status").isNull()) {
 					try {
 						String statusStr = record.get("status").asString(null);
 						if (statusStr != null) {
-							status = ExecutionStatus.valueOf(statusStr);
+							status = statusResolver.apply(statusStr);
 						}
 					} catch (Exception e) {
 						baseLogger.traceOrange("Unrecognized 'status' in Neo4j record: {}",
@@ -186,10 +200,11 @@ public abstract class AbstractService {
 					}
 				}
 
-				return ExecutionResult.<AbstractNode>builder()
+				return ExecutionResult.<AbstractNode, S>builder()
 						.status(status)
 						.build();
 			} catch (RuntimeException e) {
+				S status = null;
 				baseLogger.traceRed("Failed to map Neo4j record (status) to ExecutionResult: {}",
 						e.getMessage(), e);
 				AbstractServiceError error = new AbstractServiceError(
@@ -197,8 +212,8 @@ public abstract class AbstractService {
 						"Failed to map Neo4j record (status) to ExecutionResult: " + e.getMessage(),
 						Map.of("error", e.getClass().getName()),
 						e.getStackTrace(), e);
-				return ExecutionResult.builder()
-						.error(error)
+				return ExecutionResult.<AbstractNode, S>builder()
+						.error(error, status)
 						.build();
 			}
 		};
@@ -208,7 +223,8 @@ public abstract class AbstractService {
 	 * Maps a Neo4j {@code Record} containing a "resultNode" (node) field
 	 * to an {@link ExecutionResult} with the execution status.
 	 */
-	protected <N extends AbstractNode> Function<Record, ExecutionResult<N>> recordToNodeMapper(Class<N> nodeClass,
+	protected <N extends AbstractNode, S extends ExecutionStatuses> Function<Record, ExecutionResult<N, S>> recordToNodeMapper(
+			Class<N> nodeClass,
 			BaseLogger baseLogger) {
 		return (record) -> {
 			try {
@@ -227,6 +243,7 @@ public abstract class AbstractService {
 						}
 						node = AbstractNode.fromPropertiesMap(nodeClass, map);
 					} catch (Exception e) {
+						S status = null;
 						baseLogger.traceRed("Failed to map 'resultNode' to {}: {}", nodeClass.getSimpleName(),
 								e.getMessage(), e);
 						// fallback to error result
@@ -237,15 +254,16 @@ public abstract class AbstractService {
 										+ ": " + e.getMessage(),
 								Map.of("nodeClass", nodeClass.getName(), "error", e.getClass().getName()),
 								e.getStackTrace(), e);
-						return ExecutionResult.<N>builder()
-								.error(error)
+						return ExecutionResult.<N, S>builder()
+								.error(error, status)
 								.build();
 					}
 				}
-				return ExecutionResult.<N>builder()
+				return ExecutionResult.<N, S>builder()
 						.node(node)
 						.build();
 			} catch (RuntimeException e) {
+				S status = null;
 				baseLogger.traceRed("Failed to map Neo4j record (resultNode) to {}: {}", nodeClass.getSimpleName(),
 						e.getMessage(), e);
 				AbstractServiceError error = new AbstractServiceError(
@@ -254,17 +272,31 @@ public abstract class AbstractService {
 								+ e.getMessage(),
 						Map.of("nodeClass", nodeClass.getName(), "error", e.getClass().getName()),
 						e.getStackTrace(), e);
-				return ExecutionResult.<N>builder()
-						.error(error)
+				return ExecutionResult.<N, S>builder()
+						.error(error, status)
 						.build();
 			}
 		};
 	}
 
 	// Executers for read operations
-	protected <T extends AbstractNode> Mono<ExecutionResult<T>> executeReadMono(String query,
-			Map<String, Object> parameters, Function<Record, ExecutionResult<T>> resultMapper, String emptyResultError,
+	@SuppressWarnings("unchecked")
+	protected <T extends AbstractNode, S extends ReadExecutionStatuses> Mono<ExecutionResult<T, S>> executeReadMono(
+			String query,
+			Map<String, Object> parameters, Function<Record, ExecutionResult<T, S>> resultMapper,
+			String emptyResultError,
 			String errorMessage, BaseLogger baseLogger) {
+
+		Mono<ExecutionResult<T, S>> empty = (Mono<ExecutionResult<T, S>>) (Mono<?>) Mono.just(
+				ExecutionResult.<T, ReadExecutionStatus>builder()
+						.error(
+								new AbstractServiceError(
+										"executeReadMono",
+										"Empty result while reading mono: " + emptyResultError,
+										Map.of("query", query, "parameters", parameters)),
+								ReadExecutionStatus.EMPTY_RESULT)
+						.build());
+
 		return Flux.usingWhen(
 				Mono.fromCallable(() -> driver.session(ReactiveSession.class, sessionConfig)),
 				(ReactiveSession session) -> session.executeRead(tx -> Mono.fromDirect(tx.run(query, parameters))
@@ -272,12 +304,7 @@ public abstract class AbstractService {
 				ReactiveSession::close)
 				.next()
 				.map(resultMapper)
-				.switchIfEmpty(
-						ExecutionResults.<T>EXECUTION_READ_EMPTY_RESULT_MONO(emptyResultError,
-								Map.of("query", query, "parameters", parameters),
-								new AbstractServiceError("executeReadMono", "Empty result while reading mono",
-										Map.of("query", query, "parameters", parameters),
-										null, null)))
+				.switchIfEmpty(empty)
 				.doOnError(
 						error -> baseLogger.traceRed("Failed while query execution while reading mono: {}",
 								error.getMessage()))
@@ -287,10 +314,16 @@ public abstract class AbstractService {
 							baseLogger.trace("Query: {}", query);
 							baseLogger.trace("Parameters: {}", parameters);
 						})
-				.onErrorResume(error -> ExecutionResults.<T>NEO4J_INTERNAL_ERROR_MONO(
-						errorMessage + ": " + error.getMessage(),
-						Map.of("query", query, "parameters", parameters),
-						error.getStackTrace(), error));
+				.onErrorResume(error -> (Mono<ExecutionResult<T, S>>) (Mono<?>) Mono.just(
+						ExecutionResult.<T, ReadExecutionStatus>builder()
+								.error(
+										new AbstractServiceError(
+												errorMessage + ": " + error.getMessage(),
+												Map.of("query", query, "parameters", parameters),
+												error.getStackTrace(),
+												error),
+										ReadExecutionStatus.INTERNAL_ERROR)
+								.build()));
 	}
 
 	// protected <T extends AbstractNode> Mono<Either<DatabaseError, T>>
@@ -303,22 +336,29 @@ public abstract class AbstractService {
 	// .map(this::executionResultToEither);
 	// }
 
-	protected <T extends AbstractNode> Flux<ExecutionResult<T>> executeReadFlux(String query,
+	@SuppressWarnings("unchecked")
+	protected <T extends AbstractNode, S extends ReadExecutionStatuses> Flux<ExecutionResult<T, S>> executeReadFlux(
+			String query,
 			Map<String, Object> parameters,
-			Function<Record, ExecutionResult<T>> resultMapper, String emptyResultError, String errorMessage,
+			Function<Record, ExecutionResult<T, S>> resultMapper, String emptyResultError, String errorMessage,
 			BaseLogger baseLogger) {
+
+		Flux<ExecutionResult<T, S>> emptyExecutionResult = (Flux<ExecutionResult<T, S>>) (Flux<?>) Flux.just(
+				ExecutionResult.<T, ReadExecutionStatus>builder()
+						.error(
+								new AbstractServiceError(
+										"executeReadFlux",
+										"Empty result while reading flux: " + emptyResultError,
+										Map.of("query", query, "parameters", parameters)),
+								ReadExecutionStatus.EMPTY_RESULT)
+						.build());
 		return Flux.usingWhen(
 				Mono.fromCallable(() -> driver.session(ReactiveSession.class, sessionConfig)),
 				(ReactiveSession session) -> session.executeRead(tx -> Mono.fromDirect(tx.run(query, parameters))
 						.flatMapMany(ReactiveResult::records)),
 				ReactiveSession::close)
 				.map(resultMapper)
-				.switchIfEmpty(
-						ExecutionResults.<T>EXECUTION_READ_EMPTY_RESULT_FLUX(emptyResultError,
-								Map.of("query", query, "parameters", parameters),
-								new AbstractServiceError("executeReadFlux", "Empty result while reading flux",
-										Map.of("query", query, "parameters", parameters),
-										null, null)))
+				.switchIfEmpty(emptyExecutionResult)
 				.doOnError(
 						error -> {
 							baseLogger.traceRed("Failed while query execution while reading flux: {}",
@@ -332,18 +372,35 @@ public abstract class AbstractService {
 							baseLogger.trace("Query: {}", query);
 							baseLogger.trace("Parameters: {}", parameters.toString());
 						})
-				.onErrorResume(error -> ExecutionResults.<T>NEO4J_INTERNAL_ERROR_FLUX(
-						errorMessage + ": " + error.getMessage(),
-						Map.of("query", query, "parameters", parameters),
-						error.getStackTrace(), error));
+				.onErrorResume(error -> (Flux<ExecutionResult<T, S>>) (Flux<?>) Flux.just(
+						ExecutionResult.<T, ReadExecutionStatus>builder()
+								.error(
+										new AbstractServiceError(
+												errorMessage + ": " + error.getMessage(),
+												Map.of("query", query, "parameters", parameters),
+												error.getStackTrace(), error),
+										ReadExecutionStatus.INTERNAL_ERROR)
+								.build()));
 	}
 
 	// Executers for write operations
 
-	protected <T extends AbstractNode> Mono<ExecutionResult<T>> executeWriteMono(String query,
+	@SuppressWarnings("unchecked")
+	protected <T extends AbstractNode, S extends WriteExecutionStatuses> Mono<ExecutionResult<T, S>> executeWriteMono(
+			String query,
 			Map<String, Object> parameters,
-			Function<Record, ExecutionResult<T>> resultMapper, String emptyResultError, String errorMessage,
+			Function<Record, ExecutionResult<T, S>> resultMapper, String emptyResultError, String errorMessage,
 			BaseLogger baseLogger) {
+
+		Mono<ExecutionResult<T, S>> emptyExecutionResult = (Mono<ExecutionResult<T, S>>) (Mono<?>) Mono.just(
+				ExecutionResult.<T, WriteExecutionStatus>builder()
+						.error(
+								new AbstractServiceError(
+										"executeWriteMono",
+										"Empty result while writing mono: " + emptyResultError,
+										Map.of("query", query, "parameters", parameters)),
+								WriteExecutionStatus.EMPTY_RESULT)
+						.build());
 		return Mono.usingWhen(
 				Mono.fromCallable(() -> driver.session(ReactiveSession.class, sessionConfig)),
 				(ReactiveSession session) -> Flux
@@ -359,12 +416,7 @@ public abstract class AbstractService {
 						}),
 				(ReactiveSession session) -> Mono.from(session.close()))
 				.map(resultMapper)
-				.switchIfEmpty(
-						ExecutionResults.<T>EXECUTION_WRITE_EMPTY_RESULT_MONO(emptyResultError,
-								Map.of("query", query, "parameters", parameters),
-								new AbstractServiceError("executeWriteMono", "Empty result while writing mono",
-										Map.of("query", query, "parameters", parameters),
-										null, null)))
+				.switchIfEmpty(emptyExecutionResult)
 				.doOnError(
 						error -> {
 							baseLogger.traceRed("Failed while query execution while writing mono: {}",
@@ -380,9 +432,15 @@ public abstract class AbstractService {
 
 						})
 				.onErrorResume(error -> {
-					return ExecutionResults.<T>NEO4J_INTERNAL_ERROR_MONO(errorMessage + ": " + error.getMessage(),
-							Map.of("query", query, "parameters", parameters),
-							error.getStackTrace(), error);
+					return (Mono<ExecutionResult<T, S>>) (Mono<?>) Mono.just(
+							ExecutionResult.<T, WriteExecutionStatus>builder()
+									.error(
+											new AbstractServiceError(
+													errorMessage + ": " + error.getMessage(),
+													Map.of("query", query, "parameters", parameters),
+													error.getStackTrace(), error),
+											WriteExecutionStatus.INTERNAL_ERROR)
+									.build());
 				});
 	}
 
@@ -498,18 +556,19 @@ public abstract class AbstractService {
 	 * Try to use unique property value if possible.
 	 * 
 	 * Statuses:
-	 * - NODE_IS_NOT_EXISTS: The node does not exist.
-	 * - NODE_IS_EXISTS: The node exists.
-	 * - MORE_THAN_ONE_NODE_IS_FOUND: More than one node was found.
+	 * - NOT_EXISTS: The node does not exist.
+	 * - EXISTS: The node exists.
+	 * - MORE_THAN_ONE_FOUND: More than one node was found.
 	 * 
 	 * @param propertyName  The name of the property to check.
 	 * @param propertyValue The value of the property to check.
 	 * @param nodeLabel     The label of the node to check.
-	 * @return Either a {@link DatabaseError} or an {@link ExecutionStatus} such as
-	 *         {@link ExecutionStatus#NODE_IS_EXISTS} /
-	 *         {@link ExecutionStatus#NODE_IS_NOT_EXISTS}.
+	 * @return Result with {@link ExistsExecutionStatus} from the query, or
+	 *         {@link ExistsExecutionStatus#INTERNAL_ERROR} when input is
+	 *         invalid
+	 *         or the read fails.
 	 */
-	protected <T extends AbstractNode> Mono<ExecutionResult<T>> isNodeExistsByUniquePropertyValue(
+	protected <T extends AbstractNode> Mono<ExecutionResult<T, ExistsExecutionStatus>> isNodeExistsByUniquePropertyValue(
 			String propertyName,
 			String propertyValue,
 			String nodeLabel, Class<T> nodeClass, BaseLogger baseLogger) {
@@ -518,35 +577,26 @@ public abstract class AbstractService {
 				propertyValue,
 				nodeLabel);
 
-		if (propertyName == null) {
-			baseLogger.traceRed("Input parameter propertyName is null");
-			return ExecutionResults.INPUT_PARAMETERS_ERROR_MONO("isNodeExistsByUniquePropertyValue",
-					"Property name is null");
+		if (propertyName == null || propertyName.isEmpty()) {
+			return Mono.just(ExecutionResult.<T, ExistsExecutionStatus>builder()
+					.error(new AbstractServiceError("isNodeExistsByUniquePropertyValue",
+							"Input parameter propertyName is null or empty",
+							Map.of("propertyName", propertyName)), ExistsExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
-		if (propertyValue == null) {
-			baseLogger.traceRed("Input parameter propertyValue is null");
-			return ExecutionResults.INPUT_PARAMETERS_ERROR_MONO("isNodeExistsByUniquePropertyValue",
-					"Property value is null");
+		if (propertyValue == null || propertyValue.isEmpty()) {
+			return Mono.just(ExecutionResult.<T, ExistsExecutionStatus>builder()
+					.error(new AbstractServiceError("isNodeExistsByUniquePropertyValue",
+							"Input parameter propertyValue is null or empty",
+							Map.of("propertyValue", propertyValue)), ExistsExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
-		if (propertyName.isEmpty()) {
-			baseLogger.traceRed("Input parameter propertyName is empty");
-			return ExecutionResults.INPUT_PARAMETERS_ERROR_MONO("isNodeExistsByUniquePropertyValue",
-					"Property name is empty");
-		}
-		if (propertyValue.isEmpty()) {
-			baseLogger.traceRed("Input parameter propertyValue is empty");
-			return ExecutionResults.INPUT_PARAMETERS_ERROR_MONO("isNodeExistsByUniquePropertyValue",
-					"Property value is empty");
-		}
-		if (nodeLabel == null) {
-			baseLogger.traceRed("Input parameter nodeLabel is null");
-			return ExecutionResults.INPUT_PARAMETERS_ERROR_MONO("isNodeExistsByUniquePropertyValue",
-					"Node label is null");
-		}
-		if (nodeLabel.isEmpty()) {
-			baseLogger.traceRed("Input parameter nodeLabel is empty");
-			return ExecutionResults.INPUT_PARAMETERS_ERROR_MONO("isNodeExistsByUniquePropertyValue",
-					"Node label is empty");
+		if (nodeLabel == null || nodeLabel.isEmpty()) {
+			return Mono.just(ExecutionResult.<T, ExistsExecutionStatus>builder()
+					.error(new AbstractServiceError("isNodeExistsByUniquePropertyValue",
+							"Input parameter nodeLabel is null or empty",
+							Map.of("nodeLabel", nodeLabel)), ExistsExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		final String query = String.format(
@@ -555,9 +605,9 @@ public abstract class AbstractService {
 						"RETURN " +
 						"CASE WHEN size(nodes) = 1 THEN nodes[0] ELSE NULL END AS resultNode, " +
 						"CASE " +
-						"WHEN size(nodes) = 0 THEN 'NODE_IS_NOT_EXISTS' " +
-						"WHEN size(nodes) = 1 THEN 'NODE_IS_EXISTS' " +
-						"ELSE 'MORE_THAN_ONE_NODE_IS_FOUND' " +
+						"WHEN size(nodes) = 0 THEN 'NOT_EXISTS' " +
+						"WHEN size(nodes) = 1 THEN 'EXISTS' " +
+						"ELSE 'MORE_THAN_ONE_FOUND' " +
 						"END AS status",
 				nodeLabel, propertyName);
 
@@ -572,8 +622,44 @@ public abstract class AbstractService {
 		String errorMessage = "Failed while query execution while checking if node exists with property: "
 				+ propertyName + " value: " + propertyValue + " node label: " + nodeLabel;
 
-		return executeReadMono(query, parameters, recordToNodeAndStatusMapper(nodeClass, baseLogger), emptyResultError,
-				errorMessage, baseLogger);
+		return executeReadMono(query, parameters,
+				recordToNodeAndStatusMapper(nodeClass, ExistsExecutionStatus::valueOf, baseLogger),
+				emptyResultError,
+				errorMessage, baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed(
+									"Empty result while checking if node {} exists with property: {} value: {} node label: {}",
+									nodeClass.getSimpleName(), propertyName, propertyValue, nodeLabel);
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed(
+									"Failed to check if node {} exists with property: {} value: {} node label: {}",
+									nodeClass.getSimpleName(), propertyName, propertyValue, nodeLabel);
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed(
+									"Input parameters error while checking if node {} exists with property: {} value: {} node label: {}",
+									nodeClass.getSimpleName(), propertyName, propertyValue, nodeLabel);
+							return Mono.just(result);
+						case EXISTS:
+							baseLogger.traceGreen("Node {} exists with property: {} value: {} node label: {}",
+									nodeClass.getSimpleName(), propertyName,
+									propertyValue, nodeLabel);
+							return Mono.just(result);
+						case NOT_EXISTS:
+							baseLogger.traceOrange("Node {} does not exist with property: {} value: {} node label: {}",
+									nodeClass.getSimpleName(), propertyName, propertyValue, nodeLabel);
+							return Mono.just(result);
+						case MORE_THAN_ONE_FOUND:
+							baseLogger.traceRed(
+									"More than one node {} found with property: {} value: {} node label: {}",
+									nodeClass.getSimpleName(), propertyName, propertyValue, nodeLabel);
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	}
 
 	/**
@@ -590,42 +676,34 @@ public abstract class AbstractService {
 	 * @param baseLogger The base logger to use.
 	 * @return The execution result containing the updated node and status.
 	 */
-	protected <N extends AbstractNode> Mono<ExecutionResult<N>> updateNodeProperties(N node,
+	protected <N extends AbstractNode> Mono<ExecutionResult<N, UpdateExecutionStatus>> updateNodeProperties(
+			N node,
 			AbstractUser user, Class<N> nodeClass, BaseLogger baseLogger) {
 
 		baseLogger.trace("Updating node properties with uuid: {} and label: {}", node.getUuid(), node.getLabel());
 
-		if (node.getUuid() == null) {
-			baseLogger.traceRed("Input parameter node.uuid is null");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_MONO("updateNodeProperties",
-					"Input parameter node.uuid is null");
-		}
-		if (node.getLabel() == null) {
-			baseLogger.traceRed("Input parameter node.label is null");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_MONO("updateNodeProperties",
-					"Input parameter node.label is null");
-		}
-		if (node.getPropertiesMap() == null || node.getPropertiesMap().isEmpty()) {
-			baseLogger.traceRed("Input parameter node.propertiesMap is null or empty");
-			return ExecutionResults
-					.<N>INPUT_PARAMETERS_ERROR_MONO("updateNodeProperties",
-							"Input parameter node.propertiesMap is null or empty");
+		if (node.getUuid() == null || node.getUuid().isEmpty()) {
+			return Mono.just(ExecutionResult.<N, UpdateExecutionStatus>builder()
+					.error(new AbstractServiceError("updateNodeProperties",
+							"Input parameter node.uuid is null or empty",
+							Map.of("node", node)), UpdateExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		String query = String.format(
 				"OPTIONAL MATCH (node:%s {uuid: $nodeUuid}) " +
 						"WITH node, $properties AS propsMap " +
 						"WITH node, propsMap, " +
-						"CASE WHEN node IS NULL THEN 'NODE_NOT_FOUND' ELSE 'OK' END AS nodeStatus, " +
+						"CASE WHEN node IS NULL THEN 'NOT_FOUND' ELSE 'OK' END AS nodeStatus, " +
 						"CASE WHEN node IS NULL THEN [] ELSE [k IN keys(propsMap) WHERE node[k] IS NULL OR node[k] <> propsMap[k]] END AS diffKeys "
 						+
 						"CALL (node, nodeStatus, diffKeys, propsMap) { " +
 						// --- NODE_IS_NOT_FOUND ---
-						"WITH node, nodeStatus WHERE nodeStatus = 'NODE_IS_NOT_FOUND' RETURN NULL AS resultNode, 'NODE_IS_NOT_FOUND' AS status "
+						"WITH node, nodeStatus WHERE nodeStatus = 'NOT_FOUND' RETURN NULL AS resultNode, 'NOT_FOUND' AS status "
 						+
 						"UNION ALL " +
 						// --- NODE_NOTHING_TO_UPDATE ---
-						"WITH node, diffKeys, nodeStatus WHERE nodeStatus = 'OK' AND size(diffKeys) = 0 RETURN node AS resultNode, 'NODE_NOTHING_TO_UPDATE' AS status "
+						"WITH node, diffKeys, nodeStatus WHERE nodeStatus = 'OK' AND size(diffKeys) = 0 RETURN node AS resultNode, 'NOTHING_TO_UPDATE' AS status "
 						+
 						"UNION ALL " +
 						// --- NODE_WAS_UPDATED ---
@@ -641,7 +719,7 @@ public abstract class AbstractService {
 						"WITH node, newNode, labels(node) AS oldLabels " +
 						"FOREACH (l IN oldLabels | REMOVE node:$(l)) " +
 						"FOREACH (l IN [x IN oldLabels | x + '_VERSIONED'] | SET node:$(l)) " +
-						"RETURN newNode AS resultNode, 'NODE_WAS_UPDATED' AS status " +
+						"RETURN newNode AS resultNode, 'WAS_UPDATED' AS status " +
 						"} RETURN resultNode, status",
 				node.getLabel());
 
@@ -658,14 +736,45 @@ public abstract class AbstractService {
 				+ " and label: " + node.getLabel();
 
 		return executeWriteMono(query, parameters,
-				recordToNodeAndStatusMapper(nodeClass, baseLogger), emptyResultError, errorMessage, baseLogger);
+				recordToNodeAndStatusMapper(nodeClass, UpdateExecutionStatus::valueOf, baseLogger),
+				emptyResultError, errorMessage, baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed(
+									"Empty result while updating node {} properties with uuid: {} and label: {}",
+									nodeClass.getSimpleName(), node.getUuid(), node.getLabel());
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed("Failed to update node {} properties with uuid: {} and label: {}",
+									nodeClass.getSimpleName(), node.getUuid(), node.getLabel());
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed("Failed to update node {} properties with uuid: {} and label: {}",
+									nodeClass.getSimpleName(), node.getUuid(), node.getLabel());
+							return Mono.just(result);
+						case WAS_UPDATED:
+							baseLogger.trace("Node {} properties were updated with uuid: {} and label: {}",
+									nodeClass.getSimpleName(), node.getUuid(), node.getLabel());
+							return Mono.just(result);
+						case NOT_FOUND:
+							baseLogger.traceRed("Node {} was not found with uuid: {} and label: {}",
+									nodeClass.getSimpleName(), node.getUuid(), node.getLabel());
+							return Mono.just(result);
+						case NOTHING_TO_UPDATE:
+							baseLogger.traceRed("Node {} has nothing to update with uuid: {} and label: {}",
+									nodeClass.getSimpleName(), node.getUuid(), node.getLabel());
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	}
 
 	/**
 	 * Creates a new node in the database.
 	 * Statuses:
-	 * - NODE_NOT_CREATED: The node was not created.
-	 * - NODE_WAS_CREATED: The node was created.
+	 * - NOT_CREATED: The node was not created.
+	 * - WAS_CREATED: The node was created.
 	 * 
 	 * @param node       The node to create.
 	 * @param user       The user who is creating the node.
@@ -673,22 +782,18 @@ public abstract class AbstractService {
 	 * @param baseLogger The base logger to use.
 	 * @return The execution result containing the created node and status.
 	 */
-	protected <N extends AbstractNode> Mono<ExecutionResult<N>> createNode(N node, AbstractUser user,
+	protected <N extends AbstractNode> Mono<ExecutionResult<N, CreateNodeExecutionStatus>> createNode(N node,
+			AbstractUser user,
 			Class<N> nodeClass, BaseLogger baseLogger) {
 
 		baseLogger.trace("Creating node with label: {}", node.getLabel());
 
-		if (node.getUuid() != null) {
-			baseLogger.traceRed("Input parameter node.uuid is not null");
-			return ExecutionResults.<N>CREATING_NODE_WITH_EXISTING_UUID_ERROR_MONO(
-					"createNode",
-					"Input parameter node.uuid is not null. Use updateNodeProperties instead of createNode to update node properties.",
-					Map.of("node", node));
-		}
-		if (node.getLabel() == null || node.getLabel().isEmpty()) {
-			baseLogger.traceRed("Input parameter node.label is null or empty");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_MONO("createNode",
-					"Input parameter node.label is null or empty");
+		if (node.getUuid() != null && !node.getUuid().isEmpty()) {
+			return Mono.just(ExecutionResult.<N, CreateNodeExecutionStatus>builder()
+					.error(new AbstractServiceError("createNode",
+							"Input parameter node.uuid is not null or empty",
+							Map.of("node", node)), CreateNodeExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		String query = String.format(
@@ -697,8 +802,8 @@ public abstract class AbstractService {
 						RETURN node AS resultNode,
 						CASE
 							WHEN node IS NULL
-							THEN 'NODE_NOT_CREATED'
-							ELSE 'NODE_WAS_CREATED'
+							THEN 'NOT_CREATED'
+							ELSE 'WAS_CREATED'
 						END AS status """,
 				node.getLabel(),
 				node.getPropertiesQuery());
@@ -714,15 +819,46 @@ public abstract class AbstractService {
 		String errorMessage = "Failed while query execution while creating node with uuid: " + node.getUuid()
 				+ " and label: " + node.getLabel();
 
-		return executeWriteMono(query, parameters, recordToNodeAndStatusMapper(nodeClass, baseLogger), emptyResultError,
-				errorMessage, baseLogger);
+		return executeWriteMono(query, parameters,
+				recordToNodeAndStatusMapper(nodeClass, CreateNodeExecutionStatus::valueOf, baseLogger),
+				emptyResultError,
+				errorMessage, baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed("Empty result while creating {} : {}", nodeClass.getSimpleName(),
+									result.getNode());
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed("Failed to create node {} : {}", nodeClass.getSimpleName(),
+									result.getStatus());
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed("Failed to create node {} : {}", nodeClass.getSimpleName(),
+									result.getStatus());
+							return Mono.just(result);
+						case WAS_CREATED:
+							baseLogger.trace("Node {} was created: {}", nodeClass.getSimpleName(), result.getNode());
+							return Mono.just(result);
+						case NOT_CREATED:
+							baseLogger.traceRed("Node {} was not created: {}", nodeClass.getSimpleName(),
+									result.getNode());
+							return Mono.just(result);
+						case NODE_ALREADY_EXISTS:
+							baseLogger.traceRed("Skipping this status: {} for node {} : {}", result.getStatus(),
+									nodeClass.getSimpleName(), result.getNode());
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	}
 
 	/**
 	 * Deletes a node in the database.
 	 * Statuses:
-	 * - NODE_IS_NOT_FOUND: The node was not found.
-	 * - NODE_WAS_DELETED: The node was deleted.
+	 * - NOT_FOUND: The node was not found.
+	 * - WAS_DELETED: The node was deleted.
+	 * - MORE_THAN_ONE_FOUND: More than one node was found.
 	 * 
 	 * @param node       The node to delete.
 	 * @param user       The user who is deleting the node.
@@ -732,36 +868,65 @@ public abstract class AbstractService {
 	 * @param baseLogger The base logger to use.
 	 * @return The execution result containing the deleted node and status.
 	 */
-	protected <N extends AbstractNode> Mono<ExecutionResult<N>> deleteNode(N node,
+	protected <N extends AbstractNode> Mono<ExecutionResult<N, DeleteExecutionStatus>> deleteNode(N node,
 			AbstractUser user, Class<N> nodeClass, BaseLogger baseLogger) {
-		if (node == null) {
-			baseLogger.traceRed("Input parameter node is null");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_MONO("deleteNode", "Input parameter node is null");
-		}
-		baseLogger.trace("Deleting node with uuid: {} and label: {}", node.getUuid(), node.getLabel());
 
-		if (node.getUuid() == null) {
-			baseLogger.traceRed("Input parameter node.uuid is null");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_MONO("deleteNode", "Input parameter node.uuid is null");
+		if (node.getUuid() == null || node.getUuid().isEmpty()) {
+			return Mono.just(ExecutionResult.<N, DeleteExecutionStatus>builder()
+					.error(new AbstractServiceError("deleteNode",
+							"Input parameter node.uuid is null or empty",
+							Map.of("node", node)), DeleteExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
+
+		// String query = String.format(
+		// "OPTIONAL MATCH (n {uuid: $uuid})" +
+		// "WITH n, labels(n) AS oldLabels " +
+		// "CALL (n, oldLabels) { " +
+		// "WITH n, oldLabels " +
+		// "REMOVE n:$(oldLabels) " +
+		// "WITH n, oldLabels " +
+		// "WITH n, [label IN oldLabels | label + '_DELETED'] AS newLabels " +
+		// "SET n:$(newLabels) " +
+		// "SET n.deletedAt = datetime({ timezone: '+03:00' }), n.deletedBy = $deletedBy
+		// " +
+		// "RETURN n AS updatedNode } " +
+		// "RETURN " +
+		// "updatedNode AS resultNode, " +
+		// "CASE " +
+		// "WHEN n IS NULL THEN 'IS_NOT_FOUND' " +
+		// "ELSE 'WAS_DELETED' " +
+		// "END AS status");
 
 		String query = String.format(
-				"OPTIONAL MATCH (n {uuid: $uuid})" +
-						"WITH n, labels(n) AS oldLabels " +
-						"CALL (n, oldLabels) { " +
-						"WITH n, oldLabels " +
-						"REMOVE n:$(oldLabels) " +
-						"WITH n, oldLabels " +
-						"WITH n, [label IN oldLabels | label + '_DELETED'] AS newLabels " +
-						"SET n:$(newLabels) " +
-						"SET n.deletedAt = datetime({ timezone: '+03:00' }), n.deletedBy = $deletedBy " +
-						"RETURN n AS updatedNode } " +
-						"RETURN " +
-						"updatedNode AS resultNode, " +
-						"CASE " +
-						"WHEN n IS NULL THEN 'NODE_IS_NOT_FOUND' " +
-						"ELSE 'NODE_WAS_DELETED' " +
-						"END AS status");
+				"""
+											OPTIONAL MATCH (n {uuid: $uuid})
+						WITH collect(n) AS nodes, count(n) AS cnt
+
+						CALL {
+						    WITH nodes, cnt
+						    WHERE cnt = 1
+						    WITH nodes[0] AS n, labels(nodes[0]) AS oldLabels
+						    REMOVE n:$(oldLabels)
+						    WITH n, oldLabels
+						    WITH n, [label IN oldLabels | label + '_DELETED'] AS newLabels
+						    SET n:$(newLabels)
+						    SET n.deletedAt = datetime({ timezone: '+03:00' }),
+						        n.deletedBy = $deletedBy
+						    RETURN n AS updatedNode
+						}
+
+						RETURN
+						    CASE
+						        WHEN cnt = 0 THEN 'NOT_FOUND'
+						        WHEN cnt > 1 THEN 'MORE_THAN_ONE_FOUND'
+						        ELSE 'WAS_DELETED'
+						    END AS status,
+						    CASE
+						        WHEN cnt = 1 THEN nodes[0]
+						        ELSE NULL
+						    END AS resultNode
+											""");
 
 		Map<String, Object> parameters = Map.of("uuid", node.getUuid(), "deletedBy",
 				user != null ? user.getUuid() : "");
@@ -772,16 +937,46 @@ public abstract class AbstractService {
 		String emptyResultError = "No node deleted with uuid: " + node.getUuid() + ": No node deleted";
 		String errorMessage = "Failed while query execution while deleting node with uuid: " + node.getUuid();
 
-		return executeWriteMono(query, parameters, recordToNodeAndStatusMapper(nodeClass, baseLogger), emptyResultError,
-				errorMessage, baseLogger);
+		return executeWriteMono(query, parameters,
+				recordToNodeAndStatusMapper(nodeClass, DeleteExecutionStatus::valueOf, baseLogger), emptyResultError,
+				errorMessage, baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed("Empty result while deleting node {} with uuid: {} and label: {}",
+									nodeClass.getSimpleName(), node.getUuid(), node.getLabel());
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed("Failed to delete node {} with uuid: {} and label: {}",
+									nodeClass.getSimpleName(), node.getUuid(), node.getLabel());
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed("Failed to delete node {} with uuid: {} and label: {}",
+									nodeClass.getSimpleName(), node.getUuid(), node.getLabel());
+							return Mono.just(result);
+						case NOT_FOUND:
+							baseLogger.traceOrange("Node {} with uuid: {} and label: {} was not found",
+									nodeClass.getSimpleName(), node.getUuid(), node.getLabel());
+							return Mono.just(result);
+						case WAS_DELETED:
+							baseLogger.traceGreen("Node {} with uuid: {} and label: {} was deleted",
+									nodeClass.getSimpleName(), node.getUuid(), node.getLabel());
+							return Mono.just(result);
+						case MORE_THAN_ONE_FOUND:
+							baseLogger.traceRed("More than one node {} with uuid: {} and label: {} was found",
+									nodeClass.getSimpleName(), node.getUuid(), node.getLabel());
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	}
 
 	/**
 	 * Finds a node by its unique property value.
 	 * Statuses:
-	 * - NODE_IS_NOT_FOUND: The node was not found.
-	 * - NODE_IS_FOUND: The node was found.
-	 * - MORE_THAN_ONE_NODE_IS_FOUND: More than one node was found.
+	 * - NOT_FOUND: The node was not found.
+	 * - FOUND: The node was found.
+	 * - MORE_THAN_ONE_FOUND: More than one node was found.
 	 * 
 	 * @param propertyName  The name of the property to find the node by.
 	 * @param propertyValue The value of the property to find the node by.
@@ -790,7 +985,7 @@ public abstract class AbstractService {
 	 * @param baseLogger    The base logger to use.
 	 * @return The execution result containing the found node and status.
 	 */
-	protected <N extends AbstractNode> Mono<ExecutionResult<N>> findNodeByUniquePropertyValue(
+	protected <N extends AbstractNode> Mono<ExecutionResult<N, FindExecutionStatus>> findNodeByUniquePropertyValue(
 			String propertyName,
 			Object propertyValue,
 			String nodeLabel, Class<N> nodeClass, BaseLogger baseLogger) {
@@ -799,19 +994,27 @@ public abstract class AbstractService {
 				nodeLabel);
 
 		if (propertyName == null || propertyName.isEmpty()) {
-			baseLogger.traceRed("Input parameter propertyName is null or empty");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_MONO("findNodeByUniquePropertyValue",
-					"Input parameter propertyName is null or empty");
+			return Mono.just(ExecutionResult.<N, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("findNodeByUniquePropertyValue",
+							"Input parameter propertyName is null or empty",
+							Map.of("propertyName", propertyName)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
+
 		if (propertyValue == null) {
-			baseLogger.traceRed("Input parameter propertyValue is null");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_MONO("findNodeByUniquePropertyValue",
-					"Input parameter propertyValue is null");
+			return Mono.just(ExecutionResult.<N, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("findNodeByUniquePropertyValue",
+							"Input parameter propertyValue is null",
+							Map.of("propertyValue", propertyValue)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
+
 		if (nodeLabel == null || nodeLabel.isEmpty()) {
-			baseLogger.traceRed("Input parameter nodeLabel is null or empty");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_MONO("findNodeByUniquePropertyValue",
-					"Input parameter nodeLabel is null or empty");
+			return Mono.just(ExecutionResult.<N, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("findNodeByUniquePropertyValue",
+							"Input parameter nodeLabel is null or empty",
+							Map.of("nodeLabel", nodeLabel)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		final String query = String.format(
@@ -823,9 +1026,9 @@ public abstract class AbstractService {
 						"ELSE NULL " +
 						"END AS resultNode, " +
 						"CASE " +
-						"WHEN size(nodes) = 0 THEN 'NODE_IS_NOT_FOUND' " +
-						"WHEN size(nodes) = 1 THEN 'NODE_IS_FOUND' " +
-						"ELSE 'MORE_THAN_ONE_NODE_IS_FOUND' " +
+						"WHEN size(nodes) = 0 THEN 'NOT_FOUND' " +
+						"WHEN size(nodes) = 1 THEN 'FOUND' " +
+						"ELSE 'MORE_THAN_ONE_FOUND' " +
 						"END AS status",
 				nodeLabel, propertyName);
 
@@ -839,8 +1042,53 @@ public abstract class AbstractService {
 		String errorMessage = "Failed while query execution while finding node with property: " + propertyName
 				+ " value: " + propertyValue + " node label: " + nodeLabel;
 
-		return executeReadMono(query, parameters, recordToNodeAndStatusMapper(nodeClass, baseLogger), emptyResultError,
-				errorMessage, baseLogger);
+		return executeReadMono(query, parameters,
+				recordToNodeAndStatusMapper(nodeClass, FindExecutionStatus::valueOf, baseLogger), emptyResultError,
+				errorMessage, baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed(
+									"Empty result while finding node {} : {} by unique property value: {} and node label: {}",
+									nodeClass.getSimpleName(),
+									result.getNode(), propertyName, propertyValue, nodeLabel);
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed(
+									"Failed to find node {} : {} by unique property value: {} and node label: {}",
+									nodeClass.getSimpleName(),
+									result.getNode(), propertyName, propertyValue, nodeLabel,
+									result.getStatus());
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed(
+									"Failed to find node {} : {} by unique property value: {} and node label: {}",
+									nodeClass.getSimpleName(),
+									result.getNode(), propertyName, propertyValue, nodeLabel,
+									result.getStatus());
+							return Mono.just(result);
+						case FOUND:
+							baseLogger.traceGreen(
+									"Node {} was found: {} by unique property value: {} and node label: {}",
+									nodeClass.getSimpleName(), result.getNode(), propertyName, propertyValue,
+									nodeLabel);
+							return Mono.just(result);
+						case NOT_FOUND:
+							baseLogger.traceOrange(
+									"Node {} was not found: {} by unique property value: {} and node label: {}",
+									nodeClass.getSimpleName(),
+									result.getNode(), propertyName, propertyValue, nodeLabel);
+							return Mono.just(result);
+						case MORE_THAN_ONE_FOUND:
+							baseLogger.traceRed(
+									"More than one node {} was found: {} by unique property value: {} and node label: {}",
+									nodeClass.getSimpleName(),
+									result.getNode(), propertyName, propertyValue, nodeLabel,
+									result.getStatus());
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	}
 
 	/**
@@ -856,13 +1104,36 @@ public abstract class AbstractService {
 	 * @param baseLogger The base logger to use.
 	 * @return The execution result containing the found node and status.
 	 */
-	protected <N extends AbstractNode> Mono<ExecutionResult<N>> findNodeByUuid(String uuid,
+	protected <N extends AbstractNode> Mono<ExecutionResult<N, FindExecutionStatus>> findNodeByUuid(String uuid,
 			String nodeLabel, Class<N> nodeClass, BaseLogger baseLogger) {
 		baseLogger.trace("Finding node with uuid: {} and label: {}", uuid, nodeLabel);
+		if (uuid == null || uuid.isEmpty()) {
+			return Mono.just(ExecutionResult.<N, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("findNodeByUuid",
+							"Input parameter uuid is null or empty",
+							Map.of("uuid", uuid)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
+		}
 		return findNodeByUniquePropertyValue("uuid", uuid, nodeLabel, nodeClass, baseLogger);
 	}
 
-	protected <N extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<N>> findUniqueNodeByPropertyValueAndTargetNode(
+	/**
+	 * Finds a unique node by its property value and target node.
+	 * Statuses:
+	 * - NOT_FOUND: The node was not found.
+	 * - FOUND: The node was found.
+	 * - MORE_THAN_ONE_FOUND: More than one node was found.
+	 * 
+	 * @param propertyName     The name of the property to find the node by.
+	 * @param propertyValue    The value of the property to find the node by.
+	 * @param nodeLabel        The label of the node to find.
+	 * @param nodeClass        The class of the node to find.
+	 * @param targetNode       The target node to find the node by.
+	 * @param relationshipType The type of the relationship to find the node by.
+	 * @param baseLogger       The base logger to use.
+	 * @return The execution result containing the found node and status.
+	 */
+	protected <N extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<N, FindExecutionStatus>> findUniqueNodeByPropertyValueAndTargetNode(
 			String propertyName, Object propertyValue, String nodeLabel, Class<N> nodeClass, T targetNode,
 			String relationshipType, BaseLogger baseLogger) {
 		baseLogger.trace(
@@ -871,23 +1142,35 @@ public abstract class AbstractService {
 
 		if (propertyName == null || propertyName.isEmpty()) {
 			baseLogger.traceRed("Input parameter propertyName is null or empty");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_MONO("findUniqueNodeByPropertyValueAndTargetNode",
-					"Input parameter propertyName is null or empty");
+			return Mono.just(ExecutionResult.<N, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("findUniqueNodeByPropertyValueAndTargetNode",
+							"Input parameter propertyName is null or empty",
+							Map.of("propertyName", propertyName)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 		if (propertyValue == null) {
 			baseLogger.traceRed("Input parameter propertyValue is null");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_MONO("findUniqueNodeByPropertyValueAndTargetNode",
-					"Input parameter propertyValue is null");
+			return Mono.just(ExecutionResult.<N, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("findUniqueNodeByPropertyValueAndTargetNode",
+							"Input parameter propertyValue is null",
+							Map.of("propertyValue", propertyValue)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 		if (relationshipType == null || relationshipType.isEmpty()) {
 			baseLogger.traceRed("Input parameter relationshipType is null or empty");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_MONO("findUniqueNodeByPropertyValueAndTargetNode",
-					"Input parameter relationshipType is null or empty");
+			return Mono.just(ExecutionResult.<N, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("findUniqueNodeByPropertyValueAndTargetNode",
+							"Input parameter relationshipType is null or empty",
+							Map.of("relationshipType", relationshipType)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 		if (nodeLabel == null || nodeLabel.isEmpty()) {
 			baseLogger.traceRed("Input parameter nodeLabel is null or empty");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_MONO("findUniqueNodeByPropertyValueAndTargetNode",
-					"Input parameter nodeLabel is null or empty");
+			return Mono.just(ExecutionResult.<N, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("findUniqueNodeByPropertyValueAndTargetNode",
+							"Input parameter nodeLabel is null or empty",
+							Map.of("nodeLabel", nodeLabel)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		final String query = String.format(
@@ -899,9 +1182,9 @@ public abstract class AbstractService {
 						"ELSE NULL " +
 						"END AS resultNode, " +
 						"CASE " +
-						"WHEN size(nodes) = 0 THEN 'NODE_IS_NOT_FOUND' " +
-						"WHEN size(nodes) = 1 THEN 'NODE_IS_FOUND' " +
-						"ELSE 'MORE_THAN_ONE_NODE_IS_FOUND' " +
+						"WHEN size(nodes) = 0 THEN 'NOT_FOUND' " +
+						"WHEN size(nodes) = 1 THEN 'FOUND' " +
+						"ELSE 'MORE_THAN_ONE_FOUND' " +
 						"END AS status",
 				nodeLabel, propertyName, relationshipType);
 
@@ -918,11 +1201,52 @@ public abstract class AbstractService {
 				+ " value: " + propertyValue + " node label: " + nodeLabel + " connected to node: "
 				+ targetNode.getUuid() + " with relationship type: " + relationshipType;
 
-		return executeReadMono(query, parameters, recordToNodeAndStatusMapper(nodeClass, baseLogger), emptyResultError,
-				errorMessage, baseLogger);
+		return executeReadMono(query, parameters,
+				recordToNodeAndStatusMapper(nodeClass, FindExecutionStatus::valueOf, baseLogger), emptyResultError,
+				errorMessage, baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed("Empty result while finding {} : {}", nodeClass.getSimpleName(),
+									result.getNode());
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed("Failed to find {} : {}", nodeClass.getSimpleName(),
+									result.getStatus());
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed("Failed to find {} : {}", nodeClass.getSimpleName(),
+									result.getStatus());
+							return Mono.just(result);
+						case FOUND:
+							baseLogger.trace("{} was found: {}", nodeClass.getSimpleName(), result.getNode());
+							return Mono.just(result);
+						case NOT_FOUND:
+							baseLogger.traceRed("{} was not found: {}", nodeClass.getSimpleName(), result.getNode());
+							return Mono.just(result);
+						case MORE_THAN_ONE_FOUND:
+							baseLogger.traceRed("More than one {} was found: {}", nodeClass.getSimpleName(),
+									result.getNode());
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	}
 
-	protected <N extends AbstractNode> Flux<ExecutionResult<N>> findNodesByPropertyValue(
+	/**
+	 * Finds nodes by their property value.
+	 * Statuses:
+	 * - NOT_FOUND: The nodes were not found.
+	 * - FOUND: The nodes were found.
+	 * 
+	 * @param propertyName  The name of the property to find the nodes by.
+	 * @param propertyValue The value of the property to find the nodes by.
+	 * @param nodeLabel     The label of the nodes to find.
+	 * @param nodeClass     The class of the nodes to find.
+	 * @param baseLogger    The base logger to use.
+	 * @return The execution result containing the found nodes and status.
+	 */
+	protected <N extends AbstractNode> Flux<ExecutionResult<N, FindExecutionStatus>> findNodesByPropertyValue(
 			String propertyName, Object propertyValue, String nodeLabel, Class<N> nodeClass, BaseLogger baseLogger) {
 
 		baseLogger.trace("Finding nodes with property: {} value: {} node label: {}", propertyName, propertyValue,
@@ -930,21 +1254,40 @@ public abstract class AbstractService {
 
 		if (propertyName == null || propertyName.isEmpty()) {
 			baseLogger.traceRed("Input parameter propertyName is null or empty");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_FLUX("findNodesByPropertyValue",
-					"Input parameter propertyName is null or empty");
+			return Flux.just(ExecutionResult.<N, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("findNodesByPropertyValue",
+							"Input parameter propertyName is null or empty",
+							Map.of("propertyName", propertyName)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 		if (propertyValue == null) {
 			baseLogger.traceRed("Input parameter propertyValue is null");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_FLUX("findNodesByPropertyValue",
-					"Input parameter propertyValue is null");
+			return Flux.just(ExecutionResult.<N, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("findNodesByPropertyValue",
+							"Input parameter propertyValue is null",
+							Map.of("propertyValue", propertyValue)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 		if (nodeLabel == null || nodeLabel.isEmpty()) {
 			baseLogger.traceRed("Input parameter nodeLabel is null or empty");
-			return ExecutionResults.<N>INPUT_PARAMETERS_ERROR_FLUX("findNodesByPropertyValue",
-					"Input parameter nodeLabel is null or empty");
+			return Flux.just(ExecutionResult.<N, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("findNodesByPropertyValue",
+							"Input parameter nodeLabel is null or empty",
+							Map.of("nodeLabel", nodeLabel)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
-		final String query = String.format("OPTIONAL MATCH (node:%s {%s: $propertyValue}) RETURN node AS result",
+		final String query = String.format(
+				"""
+						OPTIONAL MATCH (node:%s {%s: $propertyValue})
+						WITH count(node) AS cnt, collect(node) AS nodes
+						RETURN
+						    CASE
+						        WHEN cnt = 0 THEN 'NOT_FOUND'
+						        ELSE 'FOUND'
+						    END AS status,
+						    nodes AS resultNodes
+						""",
 				nodeLabel, propertyName);
 
 		Map<String, Object> parameters = Map.of("propertyValue", propertyValue);
@@ -958,7 +1301,8 @@ public abstract class AbstractService {
 		String errorMessage = "Failed while query execution while finding nodes with property: " + propertyName
 				+ " value: " + propertyValue + " node label: " + nodeLabel;
 
-		return executeReadFlux(query, parameters, recordToNodeAndStatusMapper(nodeClass, baseLogger), emptyResultError,
+		return executeReadFlux(query, parameters,
+				recordToNodeAndStatusMapper(nodeClass, FindExecutionStatus::valueOf, baseLogger), emptyResultError,
 				errorMessage, baseLogger);
 	}
 
@@ -986,7 +1330,7 @@ public abstract class AbstractService {
 	 * 
 	 * @return The execution result containing the relationship and status.
 	 */
-	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<AbstractNode>> isRelationshipExists(
+	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<AbstractNode, ExistsExecutionStatus>> isRelationshipExists(
 			S sourceNode, T targetNode, String relationshipType, BaseLogger baseLogger) {
 
 		baseLogger.trace(
@@ -995,9 +1339,11 @@ public abstract class AbstractService {
 
 		if (relationshipType == null || relationshipType.isEmpty()) {
 			baseLogger.traceRed("Input parameter relationshipType is null or empty");
-			return ExecutionResults
-					.<AbstractNode>INPUT_PARAMETERS_ERROR_MONO("isRelationshipExists",
-							"Input parameter relationshipType is null or empty");
+			return Mono.just(ExecutionResult.<AbstractNode, ExistsExecutionStatus>builder()
+					.error(new AbstractServiceError("isRelationshipExists",
+							"Input parameter relationshipType is null or empty",
+							Map.of("relationshipType", relationshipType)), ExistsExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		String query = String.format("""
@@ -1005,9 +1351,9 @@ public abstract class AbstractService {
 				WITH count(r) AS relCount
 				RETURN
 				    CASE
-				        WHEN relCount = 0 THEN 'RELATIONSHIP_IS_NOT_EXISTS'
-				        WHEN relCount = 1 THEN 'RELATIONSHIP_IS_EXISTS'
-				        ELSE 'MORE_THAN_ONE_RELATIONSHIP_IS_FOUND'
+				        WHEN relCount = 0 THEN 'NOT_EXISTS'
+				        WHEN relCount = 1 THEN 'EXISTS'
+				        ELSE 'MORE_THAN_ONE_FOUND'
 				    END AS status
 				""",
 				sourceNode.getLabel(), relationshipType, targetNode.getLabel());
@@ -1024,14 +1370,69 @@ public abstract class AbstractService {
 				+ " with relationship type: " + relationshipType;
 
 		return executeReadMono(query, parameters,
-				recordToStatusMapper(baseLogger), emptyResultError, errorMessage, baseLogger);
+				recordToStatusMapper(ExistsExecutionStatus::valueOf, baseLogger), emptyResultError, errorMessage,
+				baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed(
+									"Empty result while checking if relationship exists between source node {} : {} and target node {} : {} with relationship type: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType);
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed(
+									"Failed to check if relationship exists between source node {} : {} and target node {} : {} with relationship type: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType);
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed(
+									"Input parameters error while checking if relationship exists between source node {} : {} and target node {} : {} with relationship type: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType);
+							return Mono.just(result);
+						case NOT_EXISTS:
+							baseLogger.traceOrange(
+									"Relationship does not exist between source node {} : {} and target node {} : {} with relationship type: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType);
+							return Mono.just(result);
+						case EXISTS:
+							baseLogger.traceGreen(
+									"Relationship exists between source node {} : {} and target node {} : {} with relationship type: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType);
+							return Mono.just(result);
+						case MORE_THAN_ONE_FOUND:
+							baseLogger.traceRed(
+									"More than one relationship exists between source node {} : {} and target node {} : {} with relationship type: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType);
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	}
 
-	/*
+	/**
 	 * Check if any outgoing relationships exists from a node with a given
 	 * relationship type.
+	 * 
+	 * Statuses:
+	 * - NOT_EXISTS: The relationships do not exist.
+	 * - EXISTS: The relationships exist.
+	 * - MORE_THAN_ONE_FOUND: More than one relationship was found.
+	 * 
+	 * @param sourceNode       The source node.
+	 * 
+	 * @param relationshipType The relationship type.
+	 * 
+	 * @param baseLogger       The base logger.
+	 * 
+	 * @return The execution result containing the relationships and status.
 	 */
-	protected <S extends AbstractNode> Mono<ExecutionResult<AbstractNode>> isAnyOutgoingRelationshipsExists(
+	protected <S extends AbstractNode> Mono<ExecutionResult<AbstractNode, ExistsExecutionStatus>> isAnyOutgoingRelationshipsExists(
 			S sourceNode,
 			String relationshipType, BaseLogger baseLogger) {
 
@@ -1041,9 +1442,11 @@ public abstract class AbstractService {
 
 		if (relationshipType == null || relationshipType.isEmpty()) {
 			baseLogger.traceRed("Input parameter relationshipType is null or empty");
-			return ExecutionResults
-					.<AbstractNode>INPUT_PARAMETERS_ERROR_MONO("isAnyOutgoingRelationshipsExists",
-							"Input parameter relationshipType is null or empty");
+			return Mono.just(ExecutionResult.<AbstractNode, ExistsExecutionStatus>builder()
+					.error(new AbstractServiceError("isAnyOutgoingRelationshipsExists",
+							"Input parameter relationshipType is null or empty",
+							Map.of("relationshipType", relationshipType)), ExistsExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		String query = String.format("""
@@ -1052,9 +1455,9 @@ public abstract class AbstractService {
 				WITH count(r) AS relCount
 				RETURN
 				    CASE
-				        WHEN relCount = 0 THEN 'RELATIONSHIP_IS_NOT_EXISTS'
-				        WHEN relCount = 1 THEN 'RELATIONSHIP_IS_EXISTS'
-				        ELSE 'MORE_THAN_ONE_RELATIONSHIP_IS_FOUND'
+				        WHEN relCount = 0 THEN 'NOT_EXISTS'
+				        WHEN relCount = 1 THEN 'EXISTS'
+				        ELSE 'MORE_THAN_ONE_FOUND'
 				    END AS status
 				""",
 				sourceNode.getLabel(), relationshipType);
@@ -1068,15 +1471,29 @@ public abstract class AbstractService {
 		String errorMessage = "Failed while query execution while checking if any outgoing relationships exists from source node: "
 				+ sourceNode.getUuid() + " with relationship type: " + relationshipType;
 
-		return executeReadMono(query, parameters, recordToStatusMapper(baseLogger), emptyResultError, errorMessage,
+		return executeReadMono(query, parameters, recordToStatusMapper(ExistsExecutionStatus::valueOf, baseLogger),
+				emptyResultError, errorMessage,
 				baseLogger);
 	}
 
 	/*
 	 * Check if any incoming relationships exists to a node with a given
 	 * relationship type.
+	 * 
+	 * Statuses:
+	 * - NOT_EXISTS: The relationships do not exist.
+	 * - EXISTS: The relationships exist.
+	 * - MORE_THAN_ONE_FOUND: More than one relationship was found.
+	 * 
+	 * @param targetNode The target node.
+	 * 
+	 * @param relationshipType The relationship type.
+	 * 
+	 * @param baseLogger The base logger.
+	 * 
+	 * @return The execution result containing the relationships and status.
 	 */
-	protected <T extends AbstractNode> Mono<ExecutionResult<AbstractNode>> isIncomingRelationshipsExists(
+	protected <T extends AbstractNode> Mono<ExecutionResult<AbstractNode, ExistsExecutionStatus>> isIncomingRelationshipsExists(
 			T targetNode,
 			String relationshipType, BaseLogger baseLogger) {
 
@@ -1086,9 +1503,11 @@ public abstract class AbstractService {
 
 		if (relationshipType == null || relationshipType.isEmpty()) {
 			baseLogger.traceRed("Input parameter relationshipType is null or empty");
-			return ExecutionResults
-					.<AbstractNode>INPUT_PARAMETERS_ERROR_MONO("isIncomingRelationshipsExists",
-							"Input parameter relationshipType is null or empty");
+			return Mono.just(ExecutionResult.<AbstractNode, ExistsExecutionStatus>builder()
+					.error(new AbstractServiceError("isIncomingRelationshipsExists",
+							"Input parameter relationshipType is null or empty",
+							Map.of("relationshipType", relationshipType)), ExistsExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		String query = String.format("""
@@ -1097,9 +1516,9 @@ public abstract class AbstractService {
 				WITH count(r) AS relCount
 				RETURN
 				    CASE
-				        WHEN relCount = 0 THEN 'RELATIONSHIP_IS_NOT_EXISTS'
-				        WHEN relCount = 1 THEN 'RELATIONSHIP_IS_EXISTS'
-				        ELSE 'MORE_THAN_ONE_RELATIONSHIP_IS_FOUND'
+				        WHEN relCount = 0 THEN 'NOT_EXISTS'
+				        WHEN relCount = 1 THEN 'EXISTS'
+				        ELSE 'MORE_THAN_ONE_FOUND'
 				    END AS status
 				""",
 				targetNode.getLabel(), relationshipType);
@@ -1114,7 +1533,8 @@ public abstract class AbstractService {
 				+ targetNode.getUuid() + " with relationship type: " + relationshipType;
 
 		return executeReadMono(query, parameters,
-				recordToStatusMapper(baseLogger), emptyResultError, errorMessage, baseLogger);
+				recordToStatusMapper(ExistsExecutionStatus::valueOf, baseLogger), emptyResultError, errorMessage,
+				baseLogger);
 	}
 
 	/*
@@ -1122,9 +1542,9 @@ public abstract class AbstractService {
 	 * from one node to anothers with the same relationship type.
 	 * 
 	 * Statuses:
-	 * - NODE_IS_NOT_FOUND: The source or target node is not found.
-	 * - RELATIONSHIP_IS_EXISTS: The relationship already exists.
-	 * - RELATIONSHIP_WAS_CREATED: The relationship was created.
+	 * - SOURCE_OR_TARGET_NODE_IS_NOT_FOUND: The source or target node is not found.
+	 * - IS_ALREADY_EXISTS: The relationship already exists.
+	 * - WAS_CREATED: The relationship was created.
 	 * 
 	 * @param sourceNode The source node.
 	 * 
@@ -1138,7 +1558,7 @@ public abstract class AbstractService {
 	 * 
 	 * @return The execution result containing the created relationship and status.
 	 */
-	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<AbstractNode>> createSingleRelationship(
+	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> createSingleRelationship(
 			S sourceNode,
 			T targetNode, String relationshipType, AbstractUser user, BaseLogger baseLogger) {
 
@@ -1148,27 +1568,32 @@ public abstract class AbstractService {
 
 		if (relationshipType == null || relationshipType.isEmpty()) {
 			baseLogger.traceRed("Input parameter relationshipType is null or empty");
-			return ExecutionResults.<AbstractNode>INPUT_PARAMETERS_ERROR_MONO("createSingleRelationship",
-					"Input parameter relationshipType is null or empty");
+			return Mono.just(ExecutionResult.<AbstractNode, CreateRelationshipExecutionStatus>builder()
+					.error(new AbstractServiceError("createSingleRelationship",
+							"Input parameter relationshipType is null or empty",
+							Map.of("relationshipType", relationshipType)),
+							CreateRelationshipExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
-		String query = String.format("""
-				OPTIONAL MATCH (source:%s {uuid: $sourceNodeUuid})
-				OPTIONAL MATCH (target:%s {uuid: $targetNodeUuid})
-				WITH source, target,
-				     CASE WHEN source IS NULL OR target IS NULL THEN 'NODE_IS_NOT_FOUND' ELSE 'OK' END AS nodeStatus
-				OPTIONAL MATCH (source)-[r:%s]->(target)
-				WITH source, target, r, nodeStatus,
-				     CASE
-				         WHEN nodeStatus = 'NODE_IS_NOT_FOUND' THEN 'NODE_IS_NOT_FOUND'
-				         WHEN r IS NOT NULL THEN 'RELATIONSHIP_IS_EXISTS'
-				         ELSE 'RELATIONSHIP_WAS_CREATED'
-				     END AS status
-				FOREACH (_ IN CASE WHEN status = 'RELATIONSHIP_WAS_CREATED' THEN [1] ELSE [] END |
-				    CREATE (source)-[:%s {createdAt: datetime({ timezone: '+03:00' }), createdBy: $createdBy}]->(target)
-				)
-				RETURN status
-				""",
+		String query = String.format(
+				"""
+						OPTIONAL MATCH (source:%s {uuid: $sourceNodeUuid})
+						OPTIONAL MATCH (target:%s {uuid: $targetNodeUuid})
+						WITH source, target,
+						     CASE WHEN source IS NULL OR target IS NULL THEN 'SOURCE_OR_TARGET_NODE_IS_NOT_FOUND' ELSE 'OK' END AS nodeStatus
+						OPTIONAL MATCH (source)-[r:%s]->(target)
+						WITH source, target, r, nodeStatus,
+						     CASE
+						         WHEN nodeStatus = 'SOURCE_OR_TARGET_NODE_IS_NOT_FOUND' THEN 'SOURCE_OR_TARGET_NODE_IS_NOT_FOUND'
+						         WHEN r IS NOT NULL THEN 'IS_ALREADY_EXISTS'
+						         ELSE 'WAS_CREATED'
+						     END AS status
+						FOREACH (_ IN CASE WHEN status = 'WAS_CREATED' THEN [1] ELSE [] END |
+						    CREATE (source)-[:%s {createdAt: datetime({ timezone: '+03:00' }), createdBy: $createdBy}]->(target)
+						)
+						RETURN status
+						""",
 				sourceNode.getLabel(), targetNode.getLabel(), relationshipType, relationshipType);
 
 		Map<String, Object> parameters = Map.of("sourceNodeUuid", sourceNode.getUuid(), "targetNodeUuid",
@@ -1184,17 +1609,66 @@ public abstract class AbstractService {
 				+ sourceNode.getUuid() + " and target node: " + targetNode.getUuid() + " with relationship type: "
 				+ relationshipType;
 
-		return executeWriteMono(query, parameters, recordToStatusMapper(baseLogger), emptyResultError, errorMessage,
-				baseLogger);
+		return executeWriteMono(query, parameters,
+				recordToStatusMapper(CreateRelationshipExecutionStatus::valueOf, baseLogger),
+				emptyResultError, errorMessage,
+				baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed(
+									"Empty result while creating single relationship between source node {} : {} and target node {} : {} with relationship type {}: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(),
+									relationshipType, result.getNode());
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed(
+									"Failed to create single relationship between source node {} : {} and target node {} : {} with relationship type {}: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(),
+									relationshipType, result.getNode());
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed(
+									"Failed to create single relationship between source node {} : {} and target node {} : {} with relationship type {}: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(),
+									relationshipType, result.getNode());
+							return Mono.just(result);
+						case IS_ALREADY_EXISTS:
+							baseLogger.traceRed(
+									"Single relationship between source node {} : {} and target node {} : {} with relationship type {} is already exists: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(),
+									relationshipType, result.getNode());
+							return Mono.just(result);
+						case WAS_CREATED:
+							baseLogger.trace(
+									"Single relationship between source node {} : {} and target node {} : {} with relationship type {} was created: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(),
+									relationshipType, result.getNode());
+							return Mono.just(result);
+						case SOURCE_OR_TARGET_NODE_IS_NOT_FOUND:
+							baseLogger.traceRed(
+									"Source or target node is not found for single relationship between source node {} : {} and target node {} : {} with relationship type {}: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(),
+									relationshipType, result.getNode());
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	}
 
 	/*
 	 * Delete a single relationship between two nodes.
 	 * 
 	 * Statuses:
-	 * - RELATIONSHIP_IS_NOT_EXISTS: The relationship does not exist.
-	 * - RELATIONSHIP_WAS_DELETED: The relationship was deleted.
-	 * - MORE_THAN_ONE_RELATIONSHIP_IS_FOUND: More than one relationship was found.
+	 * - IS_NOT_FOUND: The relationship does not exist.
+	 * - WAS_DELETED: The relationship was deleted.
+	 * - MORE_THAN_ONE_FOUND: More than one relationship was found.
 	 * 
 	 * @param sourceNode The source node.
 	 * 
@@ -1218,7 +1692,7 @@ public abstract class AbstractService {
 	 * 
 	 * @throws ServiceException if the query execution fails.
 	 */
-	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<AbstractNode>> deleteSingleRelationship(
+	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<AbstractNode, DeleteExecutionStatus>> deleteSingleRelationship(
 			S sourceNode,
 			T targetNode, String relationshipType, AbstractUser user, BaseLogger baseLogger) {
 
@@ -1228,8 +1702,11 @@ public abstract class AbstractService {
 
 		if (relationshipType == null || relationshipType.isEmpty()) {
 			baseLogger.traceRed("Input parameter relationshipType is null or empty");
-			return ExecutionResults.<AbstractNode>INPUT_PARAMETERS_ERROR_MONO("deleteSingleRelationship",
-					"Input parameter relationshipType is null or empty");
+			return Mono.just(ExecutionResult.<AbstractNode, DeleteExecutionStatus>builder()
+					.error(new AbstractServiceError("deleteSingleRelationship",
+							"Input parameter relationshipType is null or empty",
+							Map.of("relationshipType", relationshipType)), DeleteExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		String query = String.format("""
@@ -1244,9 +1721,9 @@ public abstract class AbstractService {
 				)
 				RETURN
 				    CASE
-				        WHEN size(rels) = 0 THEN 'RELATIONSHIP_IS_NOT_EXISTS'
-				        WHEN size(rels) = 1 THEN 'RELATIONSHIP_WAS_DELETED'
-				        ELSE 'MORE_THAN_ONE_RELATIONSHIP_IS_FOUND'
+				        WHEN size(rels) = 0 THEN 'NOT_FOUND'
+				        WHEN size(rels) = 1 THEN 'WAS_DELETED'
+				        ELSE 'MORE_THAN_ONE_FOUND'
 				    END AS status
 				""", sourceNode.getLabel(), relationshipType, targetNode.getLabel(),
 				relationshipType + DELETED_RELATIONSHIP_TYPE_POSTFIX);
@@ -1264,19 +1741,67 @@ public abstract class AbstractService {
 				+ sourceNode.getUuid() + " and target node: " + targetNode.getUuid() + " with relationship type: "
 				+ relationshipType;
 
-		return executeWriteMono(query, parameters, recordToStatusMapper(baseLogger), emptyResultError, errorMessage,
-				baseLogger);
+		return executeWriteMono(query, parameters, recordToStatusMapper(DeleteExecutionStatus::valueOf, baseLogger),
+				emptyResultError, errorMessage,
+				baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed(
+									"Empty result while deleting single relationship between source node {} : {} and target node {} : {} with relationship type {}: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType,
+									result.getNode());
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed(
+									"Failed to delete single relationship between source node {} : {} and target node {} : {} with relationship type {}: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType,
+									result.getNode());
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed(
+									"Failed to delete single relationship between source node {} : {} and target node {} : {} with relationship type {}: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType,
+									result.getNode());
+							return Mono.just(result);
+						case NOT_FOUND:
+							baseLogger.traceOrange(
+									"Single relationship between source node {} : {} and target node {} : {} with relationship type {} was not found: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType,
+									result.getNode());
+							return Mono.just(result);
+						case WAS_DELETED:
+							baseLogger.traceGreen(
+									"Single relationship between source node {} : {} and target node {} : {} with relationship type {} was deleted: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType,
+									result.getNode());
+							return Mono.just(result);
+						case MORE_THAN_ONE_FOUND:
+							baseLogger.traceRed(
+									"More than one single relationship between source node {} : {} and target node {} : {} with relationship type {} was found: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType,
+									result.getNode());
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	}
 
 	/*
 	 * Delete all outgoing relationships with RelationshipType from a node
 	 * 
 	 * Statuses:
-	 * - RELATIONSHIP_IS_NOT_EXISTS: The relationship does not exist.
-	 * - RELATIONSHIP_WAS_DELETED: The relationship was deleted.
+	 * - IS_NOT_FOUND: The relationship does not exist.
+	 * - WAS_DELETED: The relationship was deleted.
 	 * 
 	 */
-	protected <S extends AbstractNode> Mono<ExecutionResult<AbstractNode>> deleteAllOutgoingRelationshipsWithRelationshipType(
+	protected <S extends AbstractNode> Mono<ExecutionResult<AbstractNode, DeleteExecutionStatus>> deleteAllOutgoingRelationshipsWithRelationshipType(
 			S sourceNode, String relationshipType, AbstractUser user, BaseLogger baseLogger) {
 		baseLogger.trace(
 				"Deleting all outgoing relationships with relationship type: {} from source node: {}",
@@ -1284,9 +1809,12 @@ public abstract class AbstractService {
 
 		if (relationshipType == null || relationshipType.isEmpty()) {
 			baseLogger.traceRed("Input parameter relationshipType is null or empty");
-			return ExecutionResults.<AbstractNode>INPUT_PARAMETERS_ERROR_MONO(
-					"deleteAllOutgoingRelationshipsWithRelationshipType",
-					"Input parameter relationshipType is null or empty");
+			return Mono.just(ExecutionResult.<AbstractNode, DeleteExecutionStatus>builder()
+					.error(new AbstractServiceError("deleteAllOutgoingRelationshipsWithRelationshipType",
+							"Input parameter relationshipType is null or empty",
+							Map.of("relationshipType", relationshipType)),
+							DeleteExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		String query = String.format("""
@@ -1301,8 +1829,8 @@ public abstract class AbstractService {
 				}
 				RETURN
 				    CASE
-				        WHEN count(r) > 0 THEN 'RELATIONSHIP_WAS_DELETED'
-				        ELSE 'RELATIONSHIP_IS_NOT_EXISTS'
+				        WHEN count(r) > 0 THEN 'WAS_DELETED'
+				        ELSE 'IS_NOT_FOUND'
 				    END AS status
 				""",
 				sourceNode.getLabel(), relationshipType, relationshipType + DELETED_RELATIONSHIP_TYPE_POSTFIX);
@@ -1317,14 +1845,55 @@ public abstract class AbstractService {
 		String errorMessage = "Failed while query execution while deleting all outgoing relationships with relationship type: "
 				+ relationshipType + " from source node: " + sourceNode.getUuid();
 
-		return executeWriteMono(query, parameters, recordToStatusMapper(baseLogger), emptyResultError, errorMessage,
-				baseLogger);
+		return executeWriteMono(query, parameters, recordToStatusMapper(DeleteExecutionStatus::valueOf, baseLogger),
+				emptyResultError, errorMessage,
+				baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed(
+									"Empty result while deleting all outgoing relationships with relationship type {} from source node {} : {}",
+									relationshipType, sourceNode.getClass().getSimpleName(), sourceNode.getUuid());
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed(
+									"Failed to delete all outgoing relationships with relationship type {} from source node {} : {}",
+									relationshipType, sourceNode.getClass().getSimpleName(), sourceNode.getUuid());
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed(
+									"Failed to delete all outgoing relationships with relationship type {} from source node {} : {}",
+									relationshipType, sourceNode.getClass().getSimpleName(), sourceNode.getUuid());
+							return Mono.just(result);
+						case NOT_FOUND:
+							baseLogger.traceOrange(
+									"All outgoing relationships with relationship type {} from source node {} : {} were not found",
+									relationshipType, sourceNode.getClass().getSimpleName(), sourceNode.getUuid());
+							return Mono.just(result);
+						case WAS_DELETED:
+							baseLogger.traceGreen(
+									"All outgoing relationships with relationship type {} from source node {} : {} were deleted",
+									relationshipType, sourceNode.getClass().getSimpleName(), sourceNode.getUuid());
+							return Mono.just(result);
+						case MORE_THAN_ONE_FOUND:
+							baseLogger.traceRed(
+									"More than one outgoing relationship with relationship type {} from source node {} : {} was found",
+									relationshipType, sourceNode.getClass().getSimpleName(), sourceNode.getUuid());
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	}
 
 	/*
 	 * Delete all incoming relationships with RelationshipType to a node
+	 * 
+	 * Statuses:
+	 * - IS_NOT_FOUND: The relationship does not exist.
+	 * - WAS_DELETED: The relationship was deleted.
+	 * 
 	 */
-	protected <T extends AbstractNode> Mono<ExecutionResult<AbstractNode>> deleteAllIncomingRelationshipsWithRelationshipType(
+	protected <T extends AbstractNode> Mono<ExecutionResult<AbstractNode, DeleteExecutionStatus>> deleteAllIncomingRelationshipsWithRelationshipType(
 			T targetNode, String relationshipType, AbstractUser user, BaseLogger baseLogger) {
 
 		baseLogger.trace(
@@ -1333,9 +1902,11 @@ public abstract class AbstractService {
 
 		if (relationshipType == null || relationshipType.isEmpty()) {
 			baseLogger.traceRed("Input parameter relationshipType is null or empty");
-			return ExecutionResults.<AbstractNode>INPUT_PARAMETERS_ERROR_MONO(
-					"deleteAllIncomingRelationshipsWithRelationshipType",
-					"Input parameter relationshipType is null or empty");
+			return Mono.just(ExecutionResult.<AbstractNode, DeleteExecutionStatus>builder()
+					.error(new AbstractServiceError("deleteAllIncomingRelationshipsWithRelationshipType",
+							"Input parameter relationshipType is null or empty",
+							Map.of("relationshipType", relationshipType)), DeleteExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		String query = String.format("""
@@ -1350,8 +1921,8 @@ public abstract class AbstractService {
 				}
 				RETURN
 				    CASE
-				        WHEN count(r) > 0 THEN 'RELATIONSHIP_WAS_DELETED'
-				        ELSE 'RELATIONSHIP_IS_NOT_EXISTS'
+				        WHEN count(r) > 0 THEN 'WAS_DELETED'
+				        ELSE 'IS_NOT_FOUND'
 				    END AS status
 				""",
 				relationshipType, targetNode.getLabel(), relationshipType + DELETED_RELATIONSHIP_TYPE_POSTFIX);
@@ -1367,8 +1938,44 @@ public abstract class AbstractService {
 		String errorMessage = "Failed while query execution while deleting all incoming relationships with relationship type: "
 				+ relationshipType + " to target node: " + targetNode.getUuid();
 
-		return executeWriteMono(query, parameters, recordToStatusMapper(baseLogger), emptyResultError, errorMessage,
-				baseLogger);
+		return executeWriteMono(query, parameters, recordToStatusMapper(DeleteExecutionStatus::valueOf, baseLogger),
+				emptyResultError, errorMessage,
+				baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed(
+									"Empty result while deleting all incoming relationships with relationship type {} to target node {} : {}",
+									relationshipType, targetNode.getClass().getSimpleName(), targetNode.getUuid());
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed(
+									"Failed to delete all incoming relationships with relationship type {} to target node {} : {}",
+									relationshipType, targetNode.getClass().getSimpleName(), targetNode.getUuid());
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed(
+									"Failed to delete all incoming relationships with relationship type {} to target node {} : {}",
+									relationshipType, targetNode.getClass().getSimpleName(), targetNode.getUuid());
+							return Mono.just(result);
+						case NOT_FOUND:
+							baseLogger.traceOrange(
+									"All incoming relationships with relationship type {} to target node {} : {} were not found",
+									relationshipType, targetNode.getClass().getSimpleName(), targetNode.getUuid());
+							return Mono.just(result);
+						case WAS_DELETED:
+							baseLogger.traceGreen(
+									"All incoming relationships with relationship type {} to target node {} : {} were deleted",
+									relationshipType, targetNode.getClass().getSimpleName(), targetNode.getUuid());
+							return Mono.just(result);
+						case MORE_THAN_ONE_FOUND:
+							baseLogger.traceRed(
+									"More than one incoming relationship with relationship type {} to target node {} : {} was found",
+									relationshipType, targetNode.getClass().getSimpleName(), targetNode.getUuid());
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	}
 
 	/*
@@ -1383,7 +1990,7 @@ public abstract class AbstractService {
 	 * 
 	 * <img src="doc-files/test.png" alt="Test image" />
 	 */
-	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<AbstractNode>> createUniqueTargetedRelationship(
+	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> createUniqueTargetedRelationship(
 			S sourceNode,
 			T targetNode, String relationshipType, AbstractUser user, BaseLogger baseLogger) {
 		baseLogger.trace(
@@ -1392,8 +1999,12 @@ public abstract class AbstractService {
 
 		if (relationshipType == null || relationshipType.isEmpty()) {
 			baseLogger.traceRed("Input parameter relationshipType is null or empty");
-			return ExecutionResults.<AbstractNode>INPUT_PARAMETERS_ERROR_MONO("createUniqueTargetedRelationship",
-					"Input parameter relationshipType is null or empty");
+			return Mono.just(ExecutionResult.<AbstractNode, CreateRelationshipExecutionStatus>builder()
+					.error(new AbstractServiceError("createUniqueTargetedRelationship",
+							"Input parameter relationshipType is null or empty",
+							Map.of("relationshipType", relationshipType)),
+							CreateRelationshipExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		String query = String.format(
@@ -1402,7 +2013,7 @@ public abstract class AbstractService {
 						OPTIONAL MATCH (target:%s {uuid: $targetNodeUuid})
 						WITH source, target
 						WHERE source IS NULL OR target IS NULL
-						RETURN 'NODE_IS_NOT_FOUND' AS status
+						RETURN 'SOURCE_OR_TARGET_NODE_IS_NOT_FOUND' AS status
 						UNION
 						MATCH (source:%s {uuid: $sourceNodeUuid})
 						MATCH (target:%s {uuid: $targetNodeUuid})
@@ -1422,7 +2033,7 @@ public abstract class AbstractService {
 						ON CREATE SET nr.createdAt = datetime({ timezone: '+03:00' }),
 						              nr.createdBy = $createdBy,
 						              nr._created = true
-						WITH CASE WHEN nr._created THEN 'RELATIONSHIP_WAS_CREATED' ELSE 'RELATIONSHIP_IS_EXISTS' END AS status, nr
+						WITH CASE WHEN nr._created THEN 'WAS_CREATED' ELSE 'IS_ALREADY_EXISTS' END AS status, nr
 						REMOVE nr._created
 						RETURN status
 						""",
@@ -1443,16 +2054,66 @@ public abstract class AbstractService {
 				+ sourceNode.getUuid() + " and target node: " + targetNode.getUuid()
 				+ " with relationship type: " + relationshipType;
 
-		return executeWriteMono(query, parameters, recordToStatusMapper(baseLogger), emptyResultError, errorMessage,
-				baseLogger);
+		return executeWriteMono(query, parameters,
+				recordToStatusMapper(CreateRelationshipExecutionStatus::valueOf, baseLogger), emptyResultError,
+				errorMessage,
+				baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed(
+									"Empty result while creating unique relationship between source node {} : {} and target node {} : {} with relationship type: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType);
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed(
+									"Failed to create unique relationship between source node {} : {} and target node {} : {} with relationship type: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType);
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed(
+									"Failed to create unique relationship between source node {} : {} and target node {} : {} with relationship type: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType);
+							return Mono.just(result);
+						case IS_ALREADY_EXISTS:
+							baseLogger.traceOrange(
+									"Unique relationship between source node {} : {} and target node {} : {} with relationship type {} is already exists: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType,
+									result.getNode());
+							return Mono.just(result);
+						case WAS_CREATED:
+							baseLogger.traceGreen(
+									"Unique relationship between source node {} : {} and target node {} : {} with relationship type {} was created: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType,
+									result.getNode());
+							return Mono.just(result);
+						case SOURCE_OR_TARGET_NODE_IS_NOT_FOUND:
+							baseLogger.traceRed(
+									"Source or target node is not found for unique relationship between source node {} : {} and target node {} : {} with relationship type {}: {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), relationshipType,
+									result.getNode());
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	};
 
 	/*
-	 * Get all toNode with a given relationshipType from a given fromNode.
+	 * Get all target nodes with a given relationshipType from a given source node.
 	 * 
-	 * (fromNode)-[r:relationshipType]->(toNode) RETURN toNode
+	 * Statuses:
+	 * - NOT_FOUND: The target node was not found.
+	 * - FOUND: The target node was found.
+	 * 
+	 * (sourceNode)-[r:relationshipType]->(targetNode) RETURN targetNode
 	 */
-	protected <S extends AbstractNode, T extends AbstractNode> Flux<ExecutionResult<T>> getAllTargetNodesWithRelationshipType(
+	protected <S extends AbstractNode, T extends AbstractNode> Flux<ExecutionResult<T, FindExecutionStatus>> getAllTargetNodesWithRelationshipType(
 			S sourceNode, String relationshipType, Class<T> targetNodeClass, BaseLogger baseLogger) {
 		baseLogger.trace(
 				"Getting all target nodes with relationship type: {} from source node: {}",
@@ -1460,17 +2121,33 @@ public abstract class AbstractService {
 
 		if (relationshipType == null || relationshipType.isEmpty()) {
 			baseLogger.traceRed("Input parameter relationshipType is null or empty");
-			return ExecutionResults.<T>INPUT_PARAMETERS_ERROR_FLUX("getAllTargetNodesWithRelationshipType",
-					"Input parameter relationshipType is null or empty");
+			return Flux.just(ExecutionResult.<T, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("getAllTargetNodesWithRelationshipType",
+							"Input parameter relationshipType is null or empty",
+							Map.of("relationshipType", relationshipType)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
-		if (relationshipType == null || relationshipType.isEmpty()) {
+		if (targetNodeClass == null) {
 			baseLogger.traceRed("Input parameter targetNodeClass is null");
-			return ExecutionResults.<T>INPUT_PARAMETERS_ERROR_FLUX("getAllTargetNodesWithRelationshipType",
-					"Input parameter targetNodeClass is null");
+			return Flux.just(ExecutionResult.<T, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("getAllTargetNodesWithRelationshipType",
+							"Input parameter targetNodeClass is null",
+							Map.of("targetNodeClass", targetNodeClass)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		String query = String.format("""
-				MATCH (sourceNode:%s {uuid: $sourceNodeUuid})-[r:%s]->(targetNode) RETURN targetNode AS resultNode
+				MATCH (sourceNode:%s {uuid: $sourceNodeUuid})
+				OPTIONAL MATCH (sourceNode)-[r:%s]->(targetNode)
+				WITH collect(targetNode) AS nodes
+				WITH [n IN nodes WHERE n IS NOT NULL AND NONE(label IN labels(n)
+				      WHERE label ENDS WITH '_VERSIONED' OR label ENDS WITH '_DELETED')] AS filtered
+				RETURN
+				  CASE
+				    WHEN size(filtered) = 0 THEN 'NOT_FOUND'
+				    ELSE 'FOUND'
+				  END AS status,
+				  filtered AS resultNode
 				""",
 				sourceNode.getLabel(), relationshipType);
 		Map<String, Object> parameters = Map.of("sourceNodeUuid", sourceNode.getUuid());
@@ -1483,20 +2160,24 @@ public abstract class AbstractService {
 		String errorMessage = "Failed while query execution while finding target nodes with relationship type: "
 				+ relationshipType + " from source node: " + sourceNode.getUuid();
 
-		return executeReadFlux(query, parameters, recordToNodeMapper(targetNodeClass, baseLogger), emptyResultError,
+		return executeReadFlux(query, parameters,
+				recordToNodeAndStatusMapper(targetNodeClass, FindExecutionStatus::valueOf, baseLogger),
+				emptyResultError,
 				errorMessage, baseLogger);
 	}
 
 	/*
-	 * Get unique toNode with a given relationshipType from a given fromNode.
+	 * Get unique target node with a given relationshipType from a given source
+	 * node.
 	 * 
 	 * Statuses:
-	 * - NODE_IS_NOT_FOUND: The node was not found.
-	 * - NODE_IS_FOUND: The node was found.
+	 * - IS_NOT_FOUND: The node was not found.
+	 * - IS_FOUND: The node was found.
+	 * - MORE_THAN_ONE_FOUND: More than one node was found.
 	 * 
-	 * (fromNode)-[r:relationshipType]->(toNode) RETURN toNode
+	 * (sourceNode)-[r:relationshipType]->(targetNode) RETURN targetNode
 	 */
-	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<T>> getUniqueTargetNodeWithRelationshipType(
+	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<T, FindExecutionStatus>> getUniqueTargetNodeWithRelationshipType(
 			S sourceNode, String relationshipType, Class<T> targetNodeClass, BaseLogger baseLogger) {
 		baseLogger.trace(
 				"Getting unique target node with relationship type: {} from source node: {}",
@@ -1504,20 +2185,27 @@ public abstract class AbstractService {
 
 		if (relationshipType == null || relationshipType.isEmpty()) {
 			baseLogger.traceRed("Input parameter relationshipType is null or empty");
-			return ExecutionResults.<T>INPUT_PARAMETERS_ERROR_MONO("getUniqueTargetNodeWithRelationshipType",
-					"Input parameter relationshipType is null or empty");
+			return Mono.just(ExecutionResult.<T, FindExecutionStatus>builder()
+					.error(new AbstractServiceError("getUniqueTargetNodeWithRelationshipType",
+							"Input parameter relationshipType is null or empty",
+							Map.of("relationshipType", relationshipType)), FindExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 
 		String query = String.format(
 				"""
-						MATCH (sourceNode:%s {uuid: $sourceNodeUuid})-[r:%s]->(targetNode)
-						WHERE NONE(label IN labels(targetNode) WHERE label ENDS WITH 'VERSIONED')
+						MATCH (sourceNode:%s {uuid: $sourceNodeUuid})
+						OPTIONAL MATCH (sourceNode)-[r:%s]->(targetNode)
+						WHERE NONE(label IN labels(targetNode) WHERE label ENDS WITH '_VERSIONED' OR label ENDS WITH '_DELETED')
+
+						WITH collect(targetNode) AS nodes
 						RETURN
 						CASE
-							WHEN targetNode IS NULL THEN 'NODE_IS_NOT_FOUND'
-							ELSE 'NODE_IS_FOUND'
+						  WHEN size(nodes) = 0 THEN 'NOT_FOUND'
+						  WHEN size(nodes) > 1 THEN 'MORE_THAN_ONE_FOUND'
+						  ELSE 'FOUND'
 						END AS status,
-						targetNode AS resultNode
+						nodes[0] AS resultNode
 								""",
 				sourceNode.getLabel(), relationshipType);
 		Map<String, Object> parameters = Map.of("sourceNodeUuid", sourceNode.getUuid());
@@ -1530,8 +2218,50 @@ public abstract class AbstractService {
 		String errorMessage = "Failed while query execution while finding target nodes with relationship type: "
 				+ relationshipType + " from source node: " + sourceNode.getUuid();
 
-		return executeReadMono(query, parameters, recordToNodeAndStatusMapper(targetNodeClass, baseLogger),
-				emptyResultError, errorMessage, baseLogger);
+		return executeReadMono(query, parameters,
+				recordToNodeAndStatusMapper(targetNodeClass, FindExecutionStatus::valueOf, baseLogger),
+				emptyResultError, errorMessage, baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed(
+									"Empty result while finding target node {} : {} with relationship type: {} from source node {} : {}",
+									targetNodeClass.getSimpleName(), result.getNode(), relationshipType,
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid());
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed(
+									"Failed to find target node {} : {} with relationship type: {} from source node {} : {}",
+									targetNodeClass.getSimpleName(), result.getNode(), relationshipType,
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid());
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed(
+									"Failed to find target node {} : {} with relationship type: {} from source node {} : {}",
+									targetNodeClass.getSimpleName(), result.getNode(), relationshipType,
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid());
+							return Mono.just(result);
+						case FOUND:
+							baseLogger.traceGreen(
+									"Target node {} : {} with relationship type: {} from source node {} : {} was found: {}",
+									targetNodeClass.getSimpleName(), result.getNode(), relationshipType,
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid());
+							return Mono.just(result);
+						case NOT_FOUND:
+							baseLogger.traceOrange(
+									"Target node {} : {} with relationship type: {} from source node {} : {} was not found: {}",
+									targetNodeClass.getSimpleName(), result.getNode(), relationshipType,
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid());
+							return Mono.just(result);
+						case MORE_THAN_ONE_FOUND:
+							baseLogger.traceRed(
+									"More than one target node {} : {} with relationship type: {} from source node {} : {} was found: {}",
+									targetNodeClass.getSimpleName(), result.getNode(), relationshipType,
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid());
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	}
 
 	/*
@@ -1540,15 +2270,23 @@ public abstract class AbstractService {
 	 * Statuses:
 	 * (sourceNode)-[r:relationshipType]->(targetNode) RETURN sourceNode
 	 */
-	protected <T extends AbstractNode, S extends AbstractNode> Flux<ExecutionResult<S>> getAllSourceNodesWithRelationshipType(
+	protected <T extends AbstractNode, S extends AbstractNode> Flux<ExecutionResult<S, FindExecutionStatus>> getAllSourceNodesWithRelationshipType(
 			T targetNode,
 			String relationshipType, Class<S> sourceNodeClass, BaseLogger baseLogger) {
 		baseLogger.trace(
 				"Getting all source nodes with relationship type: {} to target node: {}",
 				relationshipType, targetNode.getUuid());
 
-		String query = String.format(
-				"MATCH (targetNode:%s {uuid: $targetNodeUuid})<-[r:%s]-(sourceNode) RETURN sourceNode AS result",
+		String query = String.format("""
+				OPTIONAL MATCH (targetNode:%s {uuid: $targetNodeUuid})
+				OPTIONAL MATCH (targetNode)<-[r:%s]-(sourceNode)
+				RETURN
+				CASE
+					WHEN sourceNode IS NULL THEN 'NOT_FOUND'
+					ELSE 'FOUND'
+				END AS status,
+				sourceNode AS resultNode
+				""",
 				targetNode.getLabel(), relationshipType);
 		Map<String, Object> parameters = Map.of("targetNodeUuid", targetNode.getUuid());
 
@@ -1561,8 +2299,51 @@ public abstract class AbstractService {
 		String errorMessage = "Failed while query execution while finding source nodes with relationship type: "
 				+ relationshipType + " to target node: " + targetNode.getUuid();
 
-		return executeReadFlux(query, parameters, recordToNodeMapper(sourceNodeClass, baseLogger), emptyResultError,
-				errorMessage, baseLogger);
+		return executeReadFlux(query, parameters,
+				recordToNodeAndStatusMapper(sourceNodeClass, FindExecutionStatus::valueOf, baseLogger),
+				emptyResultError,
+				errorMessage, baseLogger)
+				.flatMap(result -> {
+					switch (result.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed(
+									"Empty result while finding source nodes {} with relationship type: {} to target node {} : {}",
+									sourceNodeClass.getSimpleName(), relationshipType,
+									targetNode.getClass().getSimpleName(), targetNode.getUuid());
+							return Mono.just(result);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed(
+									"Internal error while finding source nodes {} with relationship type: {} to target node {} : {}",
+									sourceNodeClass.getSimpleName(), relationshipType,
+									targetNode.getClass().getSimpleName(), targetNode.getUuid());
+							return Mono.just(result);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed(
+									"Input parameters error while finding source nodes {} with relationship type: {} to target node {} : {}",
+									sourceNodeClass.getSimpleName(), relationshipType,
+									targetNode.getClass().getSimpleName(), targetNode.getUuid());
+							return Mono.just(result);
+						case FOUND:
+							baseLogger.traceGreen(
+									"Source nodes {} with relationship type: {} to target node {} : {} was found: {}",
+									sourceNodeClass.getSimpleName(), relationshipType,
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), result.getNode());
+							return Mono.just(result);
+						case NOT_FOUND:
+							baseLogger.traceOrange(
+									"Source nodes {} with relationship type: {} to target node {} : {} was not found: {}",
+									sourceNodeClass.getSimpleName(), relationshipType,
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), result.getNode());
+							return Mono.just(result);
+						case MORE_THAN_ONE_FOUND:
+							baseLogger.traceRed(
+									"More than one source nodes {} with relationship type: {} to target node {} : {} was found: {}",
+									sourceNodeClass.getSimpleName(), relationshipType,
+									targetNode.getClass().getSimpleName(), targetNode.getUuid(), result.getNode());
+							return Mono.just(result);
+					}
+					return Mono.just(result);
+				});
 	}
 
 	/*
@@ -1585,24 +2366,37 @@ public abstract class AbstractService {
 	 * 
 	 * @return
 	 */
-	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<AbstractNode>> createUniqueOutgoingRelationships(
+	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> createUniqueOutgoingRelationships(
 			S sourceNode, List<T> targetNodes, Class<T> targetNodeClass, String relationshipType, AbstractUser user,
 			BaseLogger baseLogger) {
+		if (targetNodes == null) {
+			baseLogger.traceRed("Input parameter targetNodes is null");
+			return Mono.just(ExecutionResult.<AbstractNode, CreateRelationshipExecutionStatus>builder()
+					.error(new AbstractServiceError("createUniqueOutgoingRelationships",
+							"Input parameter targetNodes is null", Map.of()),
+							CreateRelationshipExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
+		}
 		baseLogger.trace(
 				"Creating unique outgoing relationships between source node: {} and target nodes: {}",
 				sourceNode.getUuid(), targetNodes.stream().map(T::getUuid).collect(Collectors.toList()));
 
 		if (relationshipType == null || relationshipType.isEmpty()) {
 			baseLogger.traceRed("Input parameter relationshipType is null or empty");
-			return ExecutionResults.<AbstractNode>INPUT_PARAMETERS_ERROR_MONO("createUniqueOutgoingRelationships",
-					"Input parameter relationshipType is null or empty");
+			return Mono.just(ExecutionResult.<AbstractNode, CreateRelationshipExecutionStatus>builder()
+					.error(new AbstractServiceError("createUniqueOutgoingRelationships",
+							"Input parameter relationshipType is null or empty",
+							Map.of("relationshipType", relationshipType)),
+							CreateRelationshipExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 		return getAllTargetNodesWithRelationshipType(sourceNode, relationshipType, targetNodeClass, baseLogger)
+				.filter(result -> result.getStatus() == FindExecutionStatus.FOUND)
 				.collectList()
 				.flatMap(results -> {
 
 					List<T> existingNodes = results.stream()
-							.map(result -> result.getNode())
+							.map(ExecutionResult::getNode)
 							.filter(Objects::nonNull)
 							.collect(Collectors.toList());
 
@@ -1615,39 +2409,86 @@ public abstract class AbstractService {
 									.noneMatch(exNode -> exNode.getUuid().equals(toNode.getUuid())))
 							.collect(Collectors.toList());
 
-					Mono<ExecutionResult<AbstractNode>> firstNonBenignAfterDeletes = Flux
+					Mono<ExecutionResult<AbstractNode, DeleteExecutionStatus>> deleteProblem = Flux
 							.fromIterable(toDeleteNodes)
 							.concatMap(node -> deleteSingleRelationship(sourceNode, node, relationshipType, user,
 									baseLogger))
-							.filter(er -> {
-
-								if (er.getStatus() == ExecutionStatus.RELATIONSHIP_WAS_DELETED) {
-									baseLogger.trace("Relationship was deleted: {}", er.getNode());
-								} else if (er.getStatus() == ExecutionStatus.RELATIONSHIP_IS_NOT_EXISTS) {
-									baseLogger.trace("Relationship does not exist: {}", er.getNode());
-								} else if (er.getStatus() == ExecutionStatus.MORE_THAN_ONE_RELATIONSHIP_IS_FOUND) {
-									baseLogger.trace("More than one relationship was found: {}", er.getNode());
-								}
-								return er.getStatus() != ExecutionStatus.RELATIONSHIP_WAS_DELETED;
-							})
+							.filter(er -> (er.getStatus() != DeleteExecutionStatus.WAS_DELETED))
 							.next();
 
-					return firstNonBenignAfterDeletes.switchIfEmpty(Flux.fromIterable(toCreateNodes)
-							.concatMap(node -> createSingleRelationship(sourceNode, node, relationshipType, user,
-									baseLogger))
-							.filter(er -> {
-								if (er.getStatus() == ExecutionStatus.RELATIONSHIP_WAS_CREATED) {
-									baseLogger.trace("Relationship was created: {}", er.getNode());
-								} else if (er.getStatus() == ExecutionStatus.RELATIONSHIP_IS_NOT_EXISTS) {
-									baseLogger.trace("Relationship does not exist: {}", er.getNode());
-								} else if (er.getStatus() == ExecutionStatus.MORE_THAN_ONE_RELATIONSHIP_IS_FOUND) {
-									baseLogger.trace("More than one relationship was found: {}", er.getNode());
-								}
-								return er.getStatus() != ExecutionStatus.RELATIONSHIP_WAS_CREATED;
-							})
-							.next()
-							.switchIfEmpty(ExecutionResults
-									.<AbstractNode>RELATIONSHIP_WAS_CREATED_MONO("Relationships were created")));
+					return deleteProblem
+							.map(er -> ExecutionResult.<AbstractNode, CreateRelationshipExecutionStatus>builder()
+									.node(er.getNode())
+									.error(
+											er.getError() != null ? er.getError()
+													: new AbstractServiceError(
+															"createUniqueOutgoingRelationships",
+															"Relationship delete failed with status: " + er.getStatus(),
+															Map.of("deleteStatus", String.valueOf(er.getStatus()))),
+											CreateRelationshipExecutionStatus.INTERNAL_ERROR)
+									.build())
+							.switchIfEmpty(Mono.defer(() -> Flux.fromIterable(toCreateNodes)
+									.concatMap(node -> createSingleRelationship(sourceNode, node, relationshipType,
+											user,
+											baseLogger))
+									.filter(er -> (er.getStatus() != CreateRelationshipExecutionStatus.WAS_CREATED))
+									.next()
+									.switchIfEmpty(Mono.just(
+											ExecutionResult.<AbstractNode, CreateRelationshipExecutionStatus>builder()
+													.status(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)
+													.build()))));
+				})
+				.flatMap(executionResult -> {
+					switch (executionResult.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed(
+									"Empty result while creating unique outgoing relationships between source node: {} : {} and target nodes {} : {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNodeClass.getSimpleName(),
+									targetNodes.stream().map(T::getUuid).collect(Collectors.toList()));
+							return Mono.just(executionResult);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed(
+									"Internal error while creating unique outgoing relationships between source node: {} : {} and target nodes {} : {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNodeClass.getSimpleName(),
+									sourceNode.getUuid(),
+									targetNodes.stream().map(T::getUuid).collect(Collectors.toList()));
+							return Mono.just(executionResult);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed(
+									"Input parameters error while creating unique outgoing relationships between source node: {} : {} and target nodes {} : {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNodeClass.getSimpleName(),
+									sourceNode.getUuid(),
+									targetNodes.stream().map(T::getUuid).collect(Collectors.toList()));
+							return Mono.just(executionResult);
+						case IS_ALREADY_EXISTS:
+							baseLogger.traceOrange(
+									"Relationship already exists while creating unique outgoing relationships between source node: {} : {} and target nodes {} : {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNodeClass.getSimpleName(),
+									sourceNode.getUuid(),
+									targetNodes.stream().map(T::getUuid).collect(Collectors.toList()));
+							return Mono.just(executionResult);
+						case WAS_CREATED:
+							baseLogger.traceGreen(
+									"Relationship was created while creating unique outgoing relationships between source node: {} : {} and target nodes {} : {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNodeClass.getSimpleName(),
+									sourceNode.getUuid(),
+									targetNodes.stream().map(T::getUuid).collect(Collectors.toList()));
+							return Mono.just(executionResult);
+						case SOURCE_OR_TARGET_NODE_IS_NOT_FOUND:
+							baseLogger.traceRed(
+									"Source or target node is not found while creating unique outgoing relationships between source node: {} : {} and target nodes {} : {}",
+									sourceNode.getClass().getSimpleName(), sourceNode.getUuid(),
+									targetNodeClass.getSimpleName(),
+									sourceNode.getUuid(),
+									targetNodes.stream().map(T::getUuid).collect(Collectors.toList()));
+							return Mono.just(executionResult);
+					}
+					return Mono.just(executionResult);
 				});
 
 	}
@@ -1669,22 +2510,37 @@ public abstract class AbstractService {
 	 * 
 	 * @param user
 	 * 
-	 * @return
+	 * @return Result with {@link CreateRelationshipExecutionStatus} (same pattern
+	 * as
+	 * {@link #createUniqueOutgoingRelationships}).
 	 */
-	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<AbstractNode>> createUniqueIncomingRelationships(
+	protected <S extends AbstractNode, T extends AbstractNode> Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> createUniqueIncomingRelationships(
 			T targetNode,
 			List<S> sourceNodes, Class<S> sourceNodeClass, String relationshipType, AbstractUser user,
 			BaseLogger baseLogger) {
+		if (sourceNodes == null) {
+			baseLogger.traceRed("Input parameter sourceNodes is null");
+			return Mono.just(ExecutionResult.<AbstractNode, CreateRelationshipExecutionStatus>builder()
+					.error(new AbstractServiceError("createUniqueIncomingRelationships",
+							"Input parameter sourceNodes is null", Map.of()),
+							CreateRelationshipExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
+		}
 		baseLogger.trace(
 				"Creating unique incoming relationships between target node: {} and source nodes: {}",
 				targetNode.getUuid(), sourceNodes.stream().map(S::getUuid).collect(Collectors.toList()));
 
 		if (relationshipType == null || relationshipType.isEmpty()) {
 			baseLogger.traceRed("Input parameter relationshipType is null or empty");
-			return ExecutionResults.<AbstractNode>INPUT_PARAMETERS_ERROR_MONO("createUniqueIncomingRelationships",
-					"Input parameter relationshipType is null or empty");
+			return Mono.just(ExecutionResult.<AbstractNode, CreateRelationshipExecutionStatus>builder()
+					.error(new AbstractServiceError("createUniqueIncomingRelationships",
+							"Input parameter relationshipType is null or empty",
+							Map.of("relationshipType", relationshipType)),
+							CreateRelationshipExecutionStatus.INPUT_PARAMETERS_ERROR)
+					.build());
 		}
 		return getAllSourceNodesWithRelationshipType(targetNode, relationshipType, sourceNodeClass, baseLogger)
+				.filter(result -> result.getStatus() == FindExecutionStatus.FOUND)
 				.collectList()
 				.flatMap(results -> {
 
@@ -1703,41 +2559,81 @@ public abstract class AbstractService {
 									.noneMatch(exNode -> exNode.getUuid().equals(sNode.getUuid())))
 							.collect(Collectors.toList());
 
-					Mono<ExecutionResult<AbstractNode>> firstNonBenignAfterDeletes = Flux
+					Mono<ExecutionResult<AbstractNode, DeleteExecutionStatus>> deleteProblem = Flux
 							.fromIterable(toDeleteNodes)
-							.concatMap(node -> deleteSingleRelationship(
-									node,
-									targetNode, relationshipType, user,
+							.concatMap(node -> deleteSingleRelationship(node, targetNode, relationshipType, user,
 									baseLogger))
-							.filter(er -> {
-
-								if (er.getStatus() == ExecutionStatus.RELATIONSHIP_WAS_DELETED) {
-									baseLogger.trace("Relationship was deleted: {}", er.getNode());
-								} else if (er.getStatus() == ExecutionStatus.RELATIONSHIP_IS_NOT_EXISTS) {
-									baseLogger.trace("Relationship does not exist: {}", er.getNode());
-								} else if (er.getStatus() == ExecutionStatus.MORE_THAN_ONE_RELATIONSHIP_IS_FOUND) {
-									baseLogger.trace("More than one relationship was found: {}", er.getNode());
-								}
-								return er.getStatus() != ExecutionStatus.RELATIONSHIP_WAS_DELETED;
-							})
+							.filter(er -> (er.getStatus() != DeleteExecutionStatus.WAS_DELETED))
 							.next();
 
-					return firstNonBenignAfterDeletes.switchIfEmpty(Flux.fromIterable(toCreateNodes)
-							.concatMap(node -> createSingleRelationship(node, targetNode, relationshipType, user,
-									baseLogger))
-							.filter(er -> {
-								if (er.getStatus() == ExecutionStatus.RELATIONSHIP_WAS_CREATED) {
-									baseLogger.trace("Relationship was created: {}", er.getNode());
-								} else if (er.getStatus() == ExecutionStatus.RELATIONSHIP_IS_NOT_EXISTS) {
-									baseLogger.trace("Relationship does not exist: {}", er.getNode());
-								} else if (er.getStatus() == ExecutionStatus.MORE_THAN_ONE_RELATIONSHIP_IS_FOUND) {
-									baseLogger.trace("More than one relationship was found: {}", er.getNode());
-								}
-								return er.getStatus() != ExecutionStatus.RELATIONSHIP_WAS_CREATED;
-							})
-							.next()
-							.switchIfEmpty(ExecutionResults
-									.<AbstractNode>RELATIONSHIP_WAS_CREATED_MONO("Relationships were created")));
+					return deleteProblem
+							.map(er -> ExecutionResult.<AbstractNode, CreateRelationshipExecutionStatus>builder()
+									.node(er.getNode())
+									.error(
+											er.getError() != null ? er.getError()
+													: new AbstractServiceError(
+															"createUniqueIncomingRelationships",
+															"Relationship delete failed with status: " + er.getStatus(),
+															Map.of("deleteStatus", String.valueOf(er.getStatus()))),
+											CreateRelationshipExecutionStatus.INTERNAL_ERROR)
+									.build())
+							.switchIfEmpty(Mono.defer(() -> Flux.fromIterable(toCreateNodes)
+									.concatMap(node -> createSingleRelationship(node, targetNode, relationshipType,
+											user,
+											baseLogger))
+									.filter(er -> (er.getStatus() != CreateRelationshipExecutionStatus.WAS_CREATED))
+									.next()
+									.switchIfEmpty(Mono.just(
+											ExecutionResult.<AbstractNode, CreateRelationshipExecutionStatus>builder()
+													.status(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)
+													.build()))));
+				})
+				.flatMap(executionResult -> {
+					switch (executionResult.getStatus()) {
+						case EMPTY_RESULT:
+							baseLogger.traceRed(
+									"Empty result while creating unique incoming relationships with type {} between target node {} : {} and source nodes {} : {}",
+									relationshipType, targetNode.getClass().getSimpleName(), targetNode.getUuid(),
+									sourceNodeClass.getSimpleName(),
+									sourceNodes.stream().map(S::getUuid).collect(Collectors.toList()));
+							return Mono.just(executionResult);
+						case INTERNAL_ERROR:
+							baseLogger.traceRed(
+									"Internal error while creating unique incoming relationships with type {} between target node {} : {} and source nodes {} : {}",
+									relationshipType, targetNode.getClass().getSimpleName(), targetNode.getUuid(),
+									sourceNodeClass.getSimpleName(),
+									sourceNodes.stream().map(S::getUuid).collect(Collectors.toList()));
+							return Mono.just(executionResult);
+						case INPUT_PARAMETERS_ERROR:
+							baseLogger.traceRed(
+									"Input parameters error while creating unique incoming relationships with type {} between target node {} : {} and source nodes {} : {}",
+									relationshipType, targetNode.getClass().getSimpleName(), targetNode.getUuid(),
+									sourceNodeClass.getSimpleName(),
+									sourceNodes.stream().map(S::getUuid).collect(Collectors.toList()));
+							return Mono.just(executionResult);
+						case IS_ALREADY_EXISTS:
+							baseLogger.traceOrange(
+									"Relationship already exists while creating unique incoming relationships with type {} between target node {} : {} and source nodes {} : {}",
+									relationshipType, targetNode.getClass().getSimpleName(), targetNode.getUuid(),
+									sourceNodeClass.getSimpleName(),
+									sourceNodes.stream().map(S::getUuid).collect(Collectors.toList()));
+							return Mono.just(executionResult);
+						case WAS_CREATED:
+							baseLogger.traceGreen(
+									"Relationship was created while creating unique incoming relationships with type {} between target node {} : {} and source nodes {} : {}",
+									relationshipType, targetNode.getClass().getSimpleName(), targetNode.getUuid(),
+									sourceNodeClass.getSimpleName(),
+									sourceNodes.stream().map(S::getUuid).collect(Collectors.toList()));
+							return Mono.just(executionResult);
+						case SOURCE_OR_TARGET_NODE_IS_NOT_FOUND:
+							baseLogger.traceRed(
+									"Source or target node is not found while creating unique incoming relationships with type {} between target node {} : {} and source nodes {} : {}",
+									relationshipType, targetNode.getClass().getSimpleName(), targetNode.getUuid(),
+									sourceNodeClass.getSimpleName(),
+									sourceNodes.stream().map(S::getUuid).collect(Collectors.toList()));
+							return Mono.just(executionResult);
+					}
+					return Mono.just(executionResult);
 				});
 	}
 

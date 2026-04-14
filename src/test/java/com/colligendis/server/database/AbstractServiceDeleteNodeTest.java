@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.neo4j.driver.Record;
 
+import com.colligendis.server.database.result.ExecutionResult;
 import com.colligendis.server.logger.BaseLogger;
 
 import reactor.core.publisher.Mono;
@@ -32,7 +33,7 @@ class AbstractServiceDeleteNodeTest {
 	void deleteNode_nullNode_returnsInputParameterError() {
 		StepVerifier.create(service.deleteNode(null, user, ColligendisUser.class, baseLogger))
 				.assertNext(er -> {
-					assertThat(er.getStatus()).isEqualTo(ExecutionStatus.ERROR);
+					assertThat(er.getStatus()).isEqualTo(ExecutionStatuses.ERROR);
 					assertThat(er.getError()).isNotNull();
 					assertThat(er.getError().message()).isEqualTo("Input parameter node is null");
 				})
@@ -46,7 +47,7 @@ class AbstractServiceDeleteNodeTest {
 
 		StepVerifier.create(service.deleteNode(node, user, ColligendisUser.class, baseLogger))
 				.assertNext(er -> {
-					assertThat(er.getStatus()).isEqualTo(ExecutionStatus.ERROR);
+					assertThat(er.getStatus()).isEqualTo(ExecutionStatuses.ERROR);
 					assertThat(er.getError()).isNotNull();
 					assertThat(er.getError().message()).isEqualTo("Input parameter node.uuid is null");
 				})
@@ -59,12 +60,12 @@ class AbstractServiceDeleteNodeTest {
 		node.setUuid("node-uuid");
 		service.setWriteResult(Mono.just(ExecutionResult.<ColligendisUser>builder()
 				.node(node)
-				.status(ExecutionStatus.NODE_WAS_DELETED)
+				.status(ExecutionStatuses.NODE_WAS_DELETED)
 				.build()));
 
 		StepVerifier.create(service.deleteNode(node, user, ColligendisUser.class, baseLogger))
 				.assertNext(er -> {
-					assertThat(er.getStatus()).isEqualTo(ExecutionStatus.NODE_WAS_DELETED);
+					assertThat(er.getStatus()).isEqualTo(ExecutionStatuses.NODE_WAS_DELETED);
 					assertThat(er.getNode()).isEqualTo(node);
 				})
 				.verifyComplete();
@@ -75,12 +76,12 @@ class AbstractServiceDeleteNodeTest {
 		ColligendisUser node = new ColligendisUser();
 		node.setUuid("node-uuid");
 		service.setWriteResult(Mono.just(ExecutionResult.<ColligendisUser>builder()
-				.status(ExecutionStatus.NODE_IS_NOT_FOUND)
+				.status(ExecutionStatuses.NODE_IS_NOT_FOUND)
 				.build()));
 
 		StepVerifier.create(service.deleteNode(node, user, ColligendisUser.class, baseLogger))
 				.assertNext(er -> {
-					assertThat(er.getStatus()).isEqualTo(ExecutionStatus.NODE_IS_NOT_FOUND);
+					assertThat(er.getStatus()).isEqualTo(ExecutionStatuses.NODE_IS_NOT_FOUND);
 				})
 				.verifyComplete();
 	}
@@ -94,7 +95,7 @@ class AbstractServiceDeleteNodeTest {
 
 		StepVerifier.create(service.deleteNode(node, user, ColligendisUser.class, baseLogger))
 				.assertNext(er -> {
-					assertThat(er.getStatus()).isEqualTo(ExecutionStatus.ERROR);
+					assertThat(er.getStatus()).isEqualTo(ExecutionStatuses.ERROR);
 					assertThat(er.getError()).isNotNull();
 					assertThat(er.getError().message()).contains("neo failed");
 				})
@@ -106,7 +107,7 @@ class AbstractServiceDeleteNodeTest {
 
 		private Mono<ExecutionResult<ColligendisUser>> writeResult = Mono.just(
 				ExecutionResult.<ColligendisUser>builder()
-						.status(ExecutionStatus.NODE_WAS_DELETED)
+						.status(ExecutionStatuses.NODE_WAS_DELETED)
 						.build());
 
 		void setWriteResult(Mono<ExecutionResult<ColligendisUser>> writeResult) {

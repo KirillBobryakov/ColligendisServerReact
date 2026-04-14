@@ -5,10 +5,13 @@ import java.util.Objects;
 
 import org.springframework.stereotype.Component;
 
-import com.colligendis.server.database.ExecutionStatus;
 import com.colligendis.server.database.numista.model.Issuer;
 import com.colligendis.server.database.numista.service.IssuerService;
 import com.colligendis.server.database.numista.service.NTypeService;
+import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
+import com.colligendis.server.database.result.ExistsExecutionStatus;
+import com.colligendis.server.database.result.FindExecutionStatus;
+import com.colligendis.server.database.result.UpdateExecutionStatus;
 import com.colligendis.server.parser.numista.exception.ParserException;
 
 import lombok.RequiredArgsConstructor;
@@ -26,7 +29,7 @@ public class IssuerParser extends Parser {
 	protected Mono<NumistaPage> parse(NumistaPage numistaPage) {
 		return Mono.defer(() -> {
 			Map<String, String> emetteur = NumistaParseUtils.getAttributeWithTextSingleOption(
-					numistaPage.page, "#emetteur", "value");
+					numistaPage, "#emetteur", "value");
 
 			if (emetteur == null) {
 				numistaPage.getPipelineStepLogger()
@@ -40,7 +43,7 @@ public class IssuerParser extends Parser {
 
 			return issuerService.findByNumistaCode(code, numistaPage.getPipelineStepLogger())
 					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
+						if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
 							return Mono.just(executionResult.getNode());
 						} else {
 							numistaPage.getPipelineStepLogger().error("Failed to find Issuer: {}",
@@ -72,13 +75,13 @@ public class IssuerParser extends Parser {
 						return issuerService
 								.update(issuer, Mono.just(colligendisUser), numistaPage.getPipelineStepLogger())
 								.flatMap(er -> {
-									ExecutionStatus st = er.getStatus();
-									if (ExecutionStatus.NODE_WAS_UPDATED.equals(st)
-											|| ExecutionStatus.NODE_NOTHING_TO_UPDATE.equals(st)) {
+									if (UpdateExecutionStatus.WAS_UPDATED.equals(er.getStatus())
+											|| UpdateExecutionStatus.NOTHING_TO_UPDATE.equals(er.getStatus())) {
 										Issuer n = er.getNode();
 										return Mono.just(n != null ? n : issuer);
 									}
-									numistaPage.getPipelineStepLogger().error("Issuer update failed: {}", st);
+									numistaPage.getPipelineStepLogger().error("Issuer update failed: {}",
+											er.getStatus());
 									er.logError(numistaPage.getPipelineStepLogger());
 									return Mono.<Issuer>error(new ParserException(
 											"Failed to update issuer for nid: " + numistaPage.nid));
@@ -91,7 +94,8 @@ public class IssuerParser extends Parser {
 						.isRelationshipToIssuerExists(numistaPage.nType, issuerToUse,
 								numistaPage.getPipelineStepLogger())
 						.flatMap(executionResult -> {
-							if (executionResult.getStatus().equals(ExecutionStatus.RELATIONSHIP_IS_EXISTS)) {
+							if (executionResult.getStatus()
+									.equals(ExistsExecutionStatus.EXISTS)) {
 								numistaPage.getPipelineStepLogger().info("Issuer: {}", issuerToUse.getName());
 								numistaPage.setIssuer(issuerToUse);
 								return Mono.<NumistaPage>just(numistaPage);
@@ -101,7 +105,8 @@ public class IssuerParser extends Parser {
 											numistaPage.getPipelineStepLogger())
 									.flatMap(linkStatus -> {
 
-										if (!linkStatus.getStatus().equals(ExecutionStatus.RELATIONSHIP_WAS_CREATED)) {
+										if (!linkStatus.getStatus()
+												.equals(CreateRelationshipExecutionStatus.WAS_CREATED)) {
 											numistaPage.setIssuer(issuerToUse);
 											numistaPage.getPipelineStepLogger()
 													.error("Issuer error while linking to NType for nid: {} and issuer name: {} - Error: {}",

@@ -11,7 +11,6 @@ import org.jsoup.select.Elements;
 import org.springframework.stereotype.Component;
 
 import com.colligendis.server.database.ColligendisUser;
-import com.colligendis.server.database.ExecutionStatus;
 import com.colligendis.server.database.common.model.Year;
 import com.colligendis.server.database.numista.model.Issuer;
 import com.colligendis.server.database.numista.model.RulingAuthority;
@@ -19,6 +18,9 @@ import com.colligendis.server.database.numista.model.RulingAuthorityGroup;
 import com.colligendis.server.database.numista.service.NTypeService;
 import com.colligendis.server.database.numista.service.RulingAuthorityGroupService;
 import com.colligendis.server.database.numista.service.RulingAuthorityService;
+import com.colligendis.server.database.result.CreateNodeExecutionStatus;
+import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
+import com.colligendis.server.database.result.FindExecutionStatus;
 import com.colligendis.server.parser.PauseLock;
 import com.colligendis.server.parser.numista.exception.ParserException;
 import com.colligendis.server.parser.numista.year_parser.YearPeriodParserService;
@@ -32,7 +34,7 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class RulerParser extends Parser {
 
-	private final PauseLock pauseLock = new PauseLock("RulerParserLockable");
+	private static final PauseLock PAUSE_LOCK = new PauseLock("RulerParser");
 
 	// Cached services - lazily initialized
 	private final RulingAuthorityService rulingAuthorityService;
@@ -64,7 +66,7 @@ public class RulerParser extends Parser {
 		List<Map<String, String>> rulerMaps = new ArrayList<>();
 		for (int index = 0;; index++) {
 			Map<String, String> rulerMap = NumistaParseUtils.getAttributeWithTextSelectedOrFirstOption(
-					numistaPage.page, "#ruler" + index, "value");
+					numistaPage.page, "#ruler" + index, "value", numistaPage);
 			if (rulerMap == null) {
 				break;
 			}
@@ -77,10 +79,10 @@ public class RulerParser extends Parser {
 		String raw = map.get("value");
 		final String rulerNid = raw == null ? null : raw.strip();
 
-		return pauseLock.awaitIfPaused()
+		return PAUSE_LOCK.awaitIfPaused()
 				.then(rulingAuthorityService.findByNid(rulerNid, numistaPage.getPipelineStepLogger()))
 				.flatMap(executionResult -> {
-					if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
+					if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
 						return Mono.just(executionResult.getNode());
 					} else {
 						numistaPage.getPipelineStepLogger().error(
@@ -99,14 +101,14 @@ public class RulerParser extends Parser {
 	 * cache miss (avoids false alarms).
 	 */
 	private Mono<RulingAuthority> resolveRulerAfterCacheMiss(String rulerNid, NumistaPage numistaPage) {
-		boolean acquiredLock = pauseLock.pause();
+		boolean acquiredLock = PAUSE_LOCK.pause();
 
 		if (!acquiredLock) {
 			// Another thread is loading rulers — wait and retry once
-			return pauseLock.awaitIfPaused()
+			return PAUSE_LOCK.awaitIfPaused()
 					.then(rulingAuthorityService.findByNid(rulerNid, numistaPage.getPipelineStepLogger()))
 					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
+						if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
 							return Mono.just(executionResult.getNode());
 						} else {
 							numistaPage.getPipelineStepLogger().error("Failed to find RulingAuthority: {}",
@@ -120,10 +122,10 @@ public class RulerParser extends Parser {
 		return parseRulersByIssuerCodeFromPHPRequestMono(numistaPage.issuer, numistaPage.getNumistaParserUserMono(),
 				numistaPage)
 				.subscribeOn(Schedulers.boundedElastic())
-				.doFinally(signal -> pauseLock.resume())
+				.doFinally(signal -> PAUSE_LOCK.resume())
 				.then(rulingAuthorityService.findByNid(rulerNid, numistaPage.getPipelineStepLogger()))
 				.flatMap(executionResult -> {
-					if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)) {
+					if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
 						return Mono.just(executionResult.getNode());
 					} else {
 						numistaPage.getPipelineStepLogger().error("Failed to find RulingAuthority: {}",
@@ -143,14 +145,14 @@ public class RulerParser extends Parser {
 				.setRulingAuthorities(numistaPage.nType, foundRulers, numistaPage.getNumistaParserUserMono(),
 						numistaPage.getPipelineStepLogger())
 				.flatMap(executionResult -> {
-					if (executionResult.getStatus().equals(ExecutionStatus.RELATIONSHIP_IS_EXISTS)) {
+					if (executionResult.getStatus().equals(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)) {
 						numistaPage.getPipelineStepLogger()
 								.info("Rulers: {}",
 										foundRulers.stream().map(RulingAuthority::getNid)
 												.collect(Collectors.joining(",")));
 						return Mono.just(numistaPage);
 					}
-					if (!executionResult.getStatus().equals(ExecutionStatus.RELATIONSHIP_WAS_CREATED)) {
+					if (!executionResult.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)) {
 						numistaPage.getPipelineStepLogger()
 								.error("Rulers error while setting relationship between NType and Rulers for nid: {} and rulers numistaCodes: {} - Error: {}",
 										numistaPage.nid,
@@ -234,7 +236,7 @@ public class RulerParser extends Parser {
 			AtomicReference<RulingAuthorityGroup> currentGroupRef,
 			NumistaPage numistaPage) {
 
-		return rulingAuthorityGroupService.findByNidWithSave(nid, fullName, user, numistaPage.getPipelineStepLogger())
+		return rulingAuthorityGroupService.findByNidWithCreate(nid, fullName, user, numistaPage.getPipelineStepLogger())
 				.doOnNext(executionResult -> {
 					currentGroupRef.set(executionResult.getNode());
 				})
@@ -256,10 +258,10 @@ public class RulerParser extends Parser {
 		String rulerName = extractRulerName(fullName);
 		RulingAuthorityGroup currentGroup = currentGroupRef.get();
 
-		return rulingAuthorityService.findByNidWithSave(nid, rulerName, user, numistaPage.getPipelineStepLogger())
+		return rulingAuthorityService.findByNidWithCreate(nid, rulerName, user, numistaPage.getPipelineStepLogger())
 				.flatMap(executionResult -> {
-					if (executionResult.getStatus().equals(ExecutionStatus.NODE_IS_FOUND)
-							|| executionResult.getStatus().equals(ExecutionStatus.NODE_WAS_CREATED)) {
+					if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)
+							|| executionResult.getStatus().equals(CreateNodeExecutionStatus.WAS_CREATED)) {
 						return Mono.just(executionResult.getNode());
 					} else {
 						numistaPage.getPipelineStepLogger().error("Failed to find RulingAuthority: {}",

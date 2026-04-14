@@ -5,9 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import com.colligendis.server.database.ExecutionResult;
-import com.colligendis.server.database.ExecutionStatus;
 import com.colligendis.server.database.numista.model.RulingAuthority;
+import com.colligendis.server.database.result.ExecutionResult;
+import com.colligendis.server.database.result.FindExecutionStatus;
 import com.colligendis.server.logger.BaseLogger;
 
 import reactor.core.publisher.Mono;
@@ -51,23 +51,27 @@ class RulerServiceTest {
 		assertThat(rulingAuthorityService.lastNidPassed).isEqualTo("42");
 	}
 
-	/** Stubs {@link RulingAuthorityService#findByNid(String, BaseLogger)} without Neo4j. */
+	/**
+	 * Stubs {@link RulingAuthorityService#findByNid(String, BaseLogger)} without
+	 * Neo4j.
+	 */
 	private static final class CapturingRulingAuthorityService extends RulingAuthorityService {
 
-		private Mono<ExecutionResult<RulingAuthority>> canned = Mono.empty();
+		private Mono<ExecutionResult<RulingAuthority, FindExecutionStatus>> canned = Mono.empty();
 
 		String lastNidPassed;
 
 		void setCanned(Mono<RulingAuthority> rulerMono) {
 			this.canned = rulerMono == null ? Mono.empty()
-					: rulerMono.map(r -> ExecutionResult.<RulingAuthority>builder()
+					: rulerMono.map(r -> ExecutionResult.<RulingAuthority, FindExecutionStatus>builder()
 							.node(r)
-							.status(ExecutionStatus.NODE_IS_FOUND)
+							.status(FindExecutionStatus.FOUND)
 							.build());
 		}
 
 		@Override
-		public Mono<ExecutionResult<RulingAuthority>> findByNid(String nid, BaseLogger baseLogger) {
+		public Mono<ExecutionResult<RulingAuthority, FindExecutionStatus>> findByNid(String nid,
+				BaseLogger baseLogger) {
 			if (nid == null) {
 				return Mono.empty();
 			}
