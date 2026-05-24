@@ -6,10 +6,15 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -20,6 +25,7 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import com.colligendis.server.database.common.model.Year;
@@ -30,10 +36,15 @@ import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.Page;
+import com.microsoft.playwright.Page.NavigateOptions;
 import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.PlaywrightException;
 import com.microsoft.playwright.Response;
+import com.microsoft.playwright.TimeoutError;
+import com.microsoft.playwright.options.Cookie;
+import com.microsoft.playwright.options.WaitUntilState;
 
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Mono;
@@ -45,65 +56,414 @@ public class NumistaParseUtils {
 
 	private final YearService yearService;
 
-	protected static Boolean useCookies = true;
-	protected static String COOKIE = "_pk_ses.10.0242=1; __eoi=ID=b5cb8c17bfeff269:T=1762711520:RT=1775381833:S=AA-AfjZeOF6g0IJhKpux_LcmJMen; __gads=ID=832995cdcb1024f1:T=1762711520:RT=1775381833:S=ALNI_MaK7izygkkOAagl3LnfgtMYv4u-Hw; __gpi=UID=000012884dc93d7f:T=1762711520:RT=1775381833:S=ALNI_MbwSQATS4iyXHYDCQJzCyCoKj4KqQ; hb_insticator_uid=8772cf40-1e4f-4830-a325-6b5ee8930de8; challenge_pass=MTAzLjI0NS4yMjkuMjI1fDE3NzU0NjgxNjN8OWE3YTVhNDM2MTQ5MjEyMzc4MDcwMDlhZDU3OGM4MTk2ZTc3NDIxNjAwYjFkMjcwZTQ2NGFmNDkwNjYwZTJjOQ%3D%3D; _pk_ref.10.0242=%5B%22%22%2C%22%22%2C1775381642%2C%22https%3A%2F%2Fwww.google.com%2F%22%5D; cto_bidid=kM6Bjl94M1NCNnBZViUyRlJEJTJGOVpRUmlCdE01Qnc3bE1aWSUyQkVza2l6QjNUVlNjSEVjU09OVHNJanBUeiUyQjQ1dG5zQ0FjMk43YkpYOXdxVGFHbks1NnQweXVXRHNqeXM1d1lBQ3ZUdGlZblVwa20zcGpnJTNE; cto_bundle=isPHal9VcUJ0c1hqNiUyQjQ5aUZRTlBrMlFKdU1vT3oxTzFOMHJ3bWd4WFF3N0dxcE5KeDhTVUxBeW1tZTcyZ21tUzN0U0hOVWFTdmdEeE9VOUlRRnpFbHFKNmFBYyUyRk9reiUyQjFJZXVtJTJCVWpiNUZTNzA2RkRrb2xWSnp1MCUyRnZObkxvUzNjTVNTJTJGQzROWnglMkJlekRlellPRER4dzFsSmYxaDRDWnVSaUlja1M2N1hMcUtGcyUzRA; IABGPP_HDR_GppString=DBABMA~CQhhRkAQhhRkAAKA4AENCXFsAP_gAEPgAAqIMMtR_G__bWlr-bb3abtkeYxP9_hr7sQxBgbJk24FzLPW7JwHx2E5NAzatqIKmRIAu3TBIQNlHJDURUCgKIgFryDMaE2U4TNKJ6BkiFMZA2tYCFxvm4tjWQCY4vr_5lc1mB-t7dr82dzyy6hHn3a5fmS1UJCdIYetDfv8ZBOT-9IEd-x8v4v4_EbpEm-eS1n_pGtp4jd6YnM_dBmxt-Tyff7Pn__rl_e7X_ve_n3zv8oXH77r____f_-7___2b_-___b-__4MNAAmGhUQRlkQIBAoCEECABQVhABQIAgAASBogIATBgQ5AwAXWEyAEAKAAYIAQAAgwABAAAJAAhEAEABAIAQIBAoAAwAIAgIAGBgADABYiAQAAgOgYpgQQCBYAJEZVBpgSgAJBAS2VCCUDAgrhCkWOAQQIiYKAAAEAAoAAEB8LAQklBKxIIAuILoAACAAAKIESBFIWYAgqDNFoKwJOAyNMAyfMEySnQZAEwQkZBkQmqCQeKYohQQ5AbFLMAdPEFACLtZIQ8AA.fwAAAAAAAAAA; addtl_consent=1~20.23.3.9.2.4.9.13.6.4.15.9.5.2.11.8.1.3.2.10.2.23.8.4.15.17.2.6.3.16.4.7.6.14.5.20.2.1.6.2.1.4.31.9.3.1.14.22.8.9.5.1.6.9.24.17.5.3.1.27.1.17.10.10.8.6.2.8.3.4.30.102.14.60.1.4.1.17.7.12.25.35.5.18.9.7.17.4.20.2.4.1.17.24.4.2.7.6.1.1.3.2.14.25.3.2.2.8.2.17.9.8.6.3.10.4.20.2.4.13.10.5.6.1.3.22.16.2.6.8.6.11.6.5.17.13.3.11.9.10.28.12.1.3.2.2.17.9.6.40.17.2.2.9.15.8.7.3.12.7.2.4.1.14.5.13.22.13.2.6.1.7.10.1.4.15.2.4.9.4.4.1.4.7.3.10.5.3.12.17.4.14.8.2.15.2.5.6.2.3.2.14.11.8.2.2.7.9.13.6.11.1.13.2.14.4.1.1.3.1.1.9.7.2.16.5.19.8.3.1.5.3.5.4.8.4.1.3.2.10.4.2.13.4.2.6.9.6.3.2.2.3.1.6.9.10.11.9.19.8.3.3.1.2.1.1.1.2.7.17.2.18.4.4.3.13.4.10.1.2.4.6.3.3.3.4.1.7.11.4.1.11.3.3.1.10.13.3.2.1.1.3.1.3.1.1.2.7.2.13.7.6.8.4.3.4.5.7.2.2.5.5.3.5.4.7.9.1.4.1.2.1.7.10.7.4.1.3.1.1.2.1.3.2.2.4.1.5.6.1.8.1.3.1.1.2.2.4.3.3.3.1.1.4.3.6.1.2.1.4.1.1.4.1.1.2.1.8.1.7.4.3.2.1.2.1.5.3.15.1.15.10.28.1.2.2.6.6.3.4.1.6.3.4.7.1.1.2.1.4.1.2.3.3.1.1.1.1.4.1.5.2.3.1.2.2.6.2.1.2.2.2.3.2.1.3.2.1.1.1.1.2.1.1.1.2.2.1.1.2.1.2.1.7.1.7.1.1.2.2.1.4.2.1.1.9.1.6.2.1.6.2.3.2.1.1.1.2.2.2.1.1.1.4.1.1.2.2.1.1.7.1.2.2.1.1.1.1.2.3.1.1.2.4.1.1.1.4.5.3.3.4.5.8.1.1.2.3.1.4.3.2.2.3.1.1.1.1.11.1.1.3.1.1.2.2.1.6.1.2.3.5.2.7.1.1.2.3.2.1.1.8.4.1.1.2.1.1.8.2.2.2.3.1.4.5.1.1.1.1.1.1.1.1.4.2.4.1.8.1.1.2.1.1.2.1.4.1.2.1.1.1.2.1.2.1.1.1.1.1.2.4.1.5.1.2.1.3.3.6.4.2.9.5.2.1.1.2.1.3.3.1.6.1.2.5.1.1.2.5.1.4.2.1.200.100.100.100.300.200.200.100.100.100.400.1700.200.104.596.100.1000.800.500.400.200.200.500.100.1800.201.99.303.99.104.95.1399.1100.100.4302.498.1300.2100.800.100.600.200.900.100.200.301.399.100.800.700.201.200.1799.1400.300.400.100.2100.2300.400.1101.499.400.2100.100.100.2100.1100.201.299.600.1100.101.99.1400.2000.1400.2600.100.200.100.300; euconsent-v2=CQhhRkAQhhRkAAKA4AENCXFsAP_gAEPgAAqIMMtR_G__bWlr-bb3abtkeYxP9_hr7sQxBgbJk24FzLPW7JwHx2E5NAzatqIKmRIAu3TBIQNlHJDURUCgKIgFryDMaE2U4TNKJ6BkiFMZA2tYCFxvm4tjWQCY4vr_5lc1mB-t7dr82dzyy6hHn3a5fmS1UJCdIYetDfv8ZBOT-9IEd-x8v4v4_EbpEm-eS1n_pGtp4jd6YnM_dBmxt-Tyff7Pn__rl_e7X_ve_n3zv8oXH77r____f_-7___2b_-___b-__4MNAAmGhUQRlkQIBAoCEECABQVhABQIAgAASBogIATBgQ5AwAXWEyAEAKAAYIAQAAgwABAAAJAAhEAEABAIAQIBAoAAwAIAgIAGBgADABYiAQAAgOgYpgQQCBYAJEZVBpgSgAJBAS2VCCUDAgrhCkWOAQQIiYKAAAEAAoAAEB8LAQklBKxIIAuILoAACAAAKIESBFIWYAgqDNFoKwJOAyNMAyfMEySnQZAEwQkZBkQmqCQeKYohQQ5AbFLMAdPEFACLtZIQ8AA.IMNNR_G__bXlv-bb36btkeYxf9_hr7sQxBgbJs24FzLvW7JwH32E7NEzatqYKmRIAu3TBIQNtHJjURUChKIgVrzDsaE2U4TtKJ-BkiHMZY2tYCFxvm4tjWQCZ4vr_51d9mT-t7dr-2dzy27hnv3a9fuS1UJidKYetHfv8ZBOT-_IU9_x-_4v4_MbpEm-eS1v_tWtt43d64vP_dpuxt-Tyff7____73_e7X__e__33_-qXX_77____________f_________8.fwAAAAAAAAAA; usprivacy=1---; PHPSESSID=jc44uqi0u66117avugursn2b1n; cf_hmac=243029-1775340105-QVrXbIJ4PdnVpfz59oFN6qkmkcq4aCVLKpK1mV134aE; _sharedID=ca6bb764-6890-4fdf-9d94-222e1e66266c; _sharedID_cst=ayxgLOcsPA%3D%3D; __mggpc__=0; _ublock=1; search_order=y; __ai_fp_uuid=f4f9ff7b862be841%3A1; __upin=6ikmALdCWVhE5CWjmElk0g; saisie_rapide=c; carte=type; search_subtypes=all; pieces_par_page=200; issuer_sort=d; cf_clearance=KNlKQpcinFgvCqybJxRu3gJ6CwQF86ExLIGFv.HIHtk-1759610496-1.2.1.1-ZIkhKIJyRywXBhOw8kg8YUklv.wmZiHx.NCsNBy.RhXJC4s_gd8XTFhE5ZJgq9j_VHIOAHAHV.P2ZcH7aCzHJ_MHMGc5x27wzP65r_ZMatDXheLQIUX6jm9sY3ruestVsloIgyXdFydDCS22iAz1lllue7W2Q_uy44vDxXavB03D_pGTzeGkhhl9eyIvL6MgVzaXtivBkTA5sqSoDiIs6GKa3lnn5lmdfne8gDyq.rc; access_token=P%3EbLPZEY%24%21t.%3F9jIWgGg%28sG%5DrBF1S%28b%21%231.x7g%21%3E; pseudo=kbobryakov; _pk_id.10.0242=a36509097c0e55fd.1751222019.";
+	@Value("${colligendis.numista.cookie:}")
+	private String numistaCookie;
+
+	@Value("${colligendis.numista.use-cookies:true}")
+	private boolean numistaUseCookies;
+
+	@Value("${colligendis.numista.playwright.challenge-wait-ms:180000}")
+	private long challengeWaitMs;
+
+	@Value("${colligendis.numista.playwright.challenge-wait-forever:false}")
+	private boolean challengeWaitForever;
+
+	/**
+	 * Cookie header for Numista (from {@code colligendis.numista.cookie}). Filled in
+	 * {@link #applyNumistaCookieFromConfig()} for static helpers.
+	 */
+	private static volatile String configuredNumistaCookie = "";
+
+	private static volatile boolean configuredUseCookies = true;
+
+	private static volatile long configuredChallengeWaitMs = 180_000L;
+
+	private static volatile boolean configuredChallengeWaitForever = false;
+
+	@PostConstruct
+	void applyNumistaCookieFromConfig() {
+		configuredNumistaCookie = numistaCookie == null ? "" : numistaCookie.strip();
+		configuredUseCookies = numistaUseCookies;
+		configuredChallengeWaitMs = resolveChallengeWaitMs(challengeWaitMs);
+		configuredChallengeWaitForever = challengeWaitForever
+				|| Boolean.parseBoolean(System.getProperty("numista.playwright.challenge-wait-forever", "false"));
+		log.info(
+				"Numista cookie config: useCookies={}, cookieLength={}, challengeWaitMs={}, challengeWaitForever={}",
+				configuredUseCookies, configuredNumistaCookie.length(), configuredChallengeWaitMs,
+				configuredChallengeWaitForever);
+	}
+
+	private static long resolveChallengeWaitMs(long fromConfig) {
+		String property = System.getProperty("numista.playwright.challenge-wait-ms");
+		if (property != null && !property.isBlank()) {
+			try {
+				return Long.parseLong(property.strip());
+			} catch (NumberFormatException e) {
+				log.warn("Invalid numista.playwright.challenge-wait-ms={}, using config value", property);
+			}
+		}
+		return fromConfig > 0 ? fromConfig : 180_000L;
+	}
+
 	public static final String USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15";
 
-	private static final Object PLAYWRIGHT_LOCK = new Object();
-	private static volatile Playwright playwrightRef;
-	private static volatile Browser playwrightBrowser;
+	private static final double NAVIGATE_TIMEOUT_MS = Double.parseDouble(
+			System.getProperty("numista.playwright.navigate-timeout-ms", "60000"));
+	private static final Path PLAYWRIGHT_PROFILE_DIR = Paths
+			.get(System.getProperty("user.home"), ".colligendis", "playwright-numista-profile");
+	private static final boolean PLAYWRIGHT_HEADLESS = Boolean
+			.parseBoolean(System.getProperty("numista.playwright.headless", "true"));
+
+	private static final String BOT_CHALLENGE_MARKER = "Enable JavaScript and cookies to continue";
+	private static final String NUMISTA_HOME_URL = "https://en.numista.com/";
 
 	@LogExecutionTime
 	public static Document loadPageByURL(String urlString) {
-		synchronized (PLAYWRIGHT_LOCK) {
-			try {
-				if (playwrightBrowser == null) {
-					Playwright created = Playwright.create();
-					try {
-						playwrightBrowser = created.chromium().launch(
-								new BrowserType.LaunchOptions().setHeadless(true));
-						playwrightRef = created;
-					} catch (RuntimeException e) {
-						created.close();
-						throw e;
-					}
-					Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-						synchronized (PLAYWRIGHT_LOCK) {
-							if (playwrightBrowser != null) {
-								playwrightBrowser.close();
-								playwrightBrowser = null;
-							}
-							if (playwrightRef != null) {
-								playwrightRef.close();
-								playwrightRef = null;
-							}
-						}
-					}));
-				}
+		try {
+			Files.createDirectories(PLAYWRIGHT_PROFILE_DIR);
+		} catch (IOException e) {
+			throw new IllegalStateException("Failed to init Playwright profile directory", e);
+		}
 
-				Map<String, String> headers = new HashMap<>();
-				headers.put("Accept",
-						"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
-				headers.put("Accept-Language", "en-US,en;q=0.9");
-				headers.put("User-Agent",
-						"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-								+ "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-				if (useCookies) {
-					headers.put("Cookie", COOKIE);
-				}
+		String cookieHeader = resolveCookieHeader();
+		if (configuredUseCookies && cookieHeader.isEmpty()) {
+			log.warn(
+					"Numista cookie is empty (set NUMISTA_COOKIE or colligendis.numista.cookie). "
+							+ "Cloudflare will likely block headless requests.");
+		}
 
-				try (BrowserContext context = playwrightBrowser.newContext(
-						new Browser.NewContextOptions().setExtraHTTPHeaders(headers))) {
-					Page page = context.newPage();
-					Response response = page.navigate(urlString);
-					if (response != null && response.status() == 404) {
-						return null;
-					}
-					return Jsoup.parse(page.content());
-				}
-			} catch (PlaywrightException e) {
-				log.error("Error loading page by URL: {}", urlString, e);
+		Page page = null;
+		try {
+			BrowserContext context = NumistaPlaywrightSession.getContext();
+			NumistaPlaywrightSession.applyCookies(context, cookieHeader, urlString);
+			page = context.newPage();
+
+			Response response = navigate(page, urlString);
+			if (response != null && response.status() == 404) {
 				return null;
+			}
+
+			waitPastBotChallenge(page, urlString);
+
+			if (isBotChallengeHtml(page.content())) {
+				log.info("Bot challenge on {}, warming session via {}", urlString, NUMISTA_HOME_URL);
+				navigate(page, NUMISTA_HOME_URL);
+				waitPastBotChallenge(page, NUMISTA_HOME_URL);
+				NumistaPlaywrightSession.markWarmedUp();
+
+				response = navigate(page, urlString);
+				if (response != null && response.status() == 404) {
+					return null;
+				}
+				waitPastBotChallenge(page, urlString);
+			}
+
+			String html = page.content();
+			if (isBotChallengeHtml(html)) {
+				long extendedWaitMs = configuredChallengeWaitForever
+						? Long.MAX_VALUE
+						: configuredChallengeWaitMs * 3;
+				if (!PLAYWRIGHT_HEADLESS) {
+					log.warn(
+							"Solve Cloudflare in the visible browser window if prompted, then wait{}...",
+							configuredChallengeWaitForever ? " (no timeout)" : " (up to " + extendedWaitMs / 1000 + " s)");
+				} else {
+					log.warn(
+							"Cloudflare challenge still present; waiting{} for auto-clearance (cf_clearance cookie)...",
+							configuredChallengeWaitForever ? " indefinitely" : " up to " + extendedWaitMs / 1000 + " s");
+				}
+				waitPastBotChallenge(page, urlString, extendedWaitMs);
+				html = page.content();
+			}
+
+			if (isBotChallengeHtml(html)) {
+				log.error(
+						"Numista bot challenge still present for {}. Set a fresh Cookie header "
+								+ "(cf_clearance, PHPSESSID) in NUMISTA_COOKIE, or run once with "
+								+ "-Dnumista.playwright.headless=false and open {} in the launched browser.",
+						urlString, NUMISTA_HOME_URL);
+				return null;
+			}
+			return Jsoup.parse(html, urlString);
+		} catch (PlaywrightException e) {
+			log.error("Error loading page by URL: {}", urlString, e);
+			return null;
+		} finally {
+			if (page != null) {
+				try {
+					page.close();
+				} catch (PlaywrightException ignored) {
+					// page may already be closed if context was reset
+				}
+			}
+		}
+	}
+
+	private static String resolveCookieHeader() {
+		if (!configuredUseCookies) {
+			return "";
+		}
+		if (!configuredNumistaCookie.isEmpty()) {
+			return configuredNumistaCookie;
+		}
+		String fallback = PageLoader.COOKIE;
+		return fallback == null ? "" : fallback.strip();
+	}
+
+	private static Response navigate(Page page, String urlString) {
+		try {
+			return page.navigate(
+					urlString,
+					new NavigateOptions()
+							.setWaitUntil(WaitUntilState.LOAD)
+							.setTimeout(NAVIGATE_TIMEOUT_MS));
+		} catch (TimeoutError e) {
+			log.warn("Navigate timed out after {} ms for {}. Will continue with current page content.",
+					(int) NAVIGATE_TIMEOUT_MS, urlString);
+			return null;
+		}
+	}
+
+	/** True when HTML is Cloudflare / bot wall instead of Numista content. */
+	public static boolean isBotChallengeHtml(String html) {
+		if (html == null || html.isBlank()) {
+			return false;
+		}
+		return html.contains(BOT_CHALLENGE_MARKER)
+				|| html.contains("challenge-platform")
+				|| html.contains("cf-browser-verification");
+	}
+
+	public static boolean isBotChallengeDocument(Document document) {
+		if (document == null) {
+			return false;
+		}
+		return isBotChallengeHtml(document.html());
+	}
+
+	/**
+	 * Polls until the challenge page is replaced or the configured wait budget elapses.
+	 */
+	private static void waitPastBotChallenge(Page page, String urlString) {
+		waitPastBotChallenge(page, urlString, effectiveChallengeWaitMs());
+	}
+
+	private static long effectiveChallengeWaitMs() {
+		if (configuredChallengeWaitForever) {
+			return Long.MAX_VALUE;
+		}
+		return configuredChallengeWaitMs;
+	}
+
+	private static void waitPastBotChallenge(Page page, String urlString, long maxWaitMs) {
+		if (configuredChallengeWaitForever) {
+			maxWaitMs = Long.MAX_VALUE;
+		}
+		boolean unbounded = maxWaitMs == Long.MAX_VALUE;
+		long deadline = unbounded ? Long.MAX_VALUE : System.currentTimeMillis() + maxWaitMs;
+		long nextLogAt = 0;
+		long startedAt = System.currentTimeMillis();
+		while (unbounded || System.currentTimeMillis() < deadline) {
+			String html = page.content();
+			if (!isBotChallengeHtml(html)) {
+				if (System.currentTimeMillis() - startedAt > 5_000) {
+					log.info("Numista bot challenge cleared for {} (waited {} s)", urlString,
+							(System.currentTimeMillis() - startedAt) / 1000);
+				}
+				return;
+			}
+			long now = System.currentTimeMillis();
+			if (now >= nextLogAt) {
+				long waitedSec = (now - startedAt) / 1000;
+				if (unbounded) {
+					log.info("Waiting for Numista bot challenge to clear: {} ({} s, no timeout)", urlString,
+							waitedSec);
+				} else {
+					long remainingSec = Math.max(0, (deadline - now) / 1000);
+					log.info("Waiting for Numista bot challenge to clear: {} ({} s elapsed, ~{} s left)",
+							urlString, waitedSec, remainingSec);
+				}
+				nextLogAt = now + 5_000;
+			}
+			try {
+				page.waitForTimeout(1_000);
+			} catch (PlaywrightException e) {
+				return;
+			}
+		}
+	}
+
+	private static List<Cookie> toPlaywrightCookies(String rawCookieHeader, String urlString) {
+		if (rawCookieHeader == null || rawCookieHeader.isBlank()) {
+			return List.of();
+		}
+		String cookieDomain = cookieDomainForUrl(urlString);
+		if (cookieDomain == null) {
+			return List.of();
+		}
+
+		List<Cookie> cookies = new ArrayList<>();
+		Arrays.stream(rawCookieHeader.split(";"))
+				.map(String::trim)
+				.filter(part -> !part.isEmpty() && part.contains("="))
+				.forEach(part -> {
+					String[] kv = part.split("=", 2);
+					String name = kv[0].trim();
+					String value = kv.length > 1 ? kv[1] : "";
+					if (name.isEmpty()) {
+						return;
+					}
+					Cookie cookie = new Cookie(name, value)
+							.setDomain(cookieDomain)
+							.setPath("/");
+					cookies.add(cookie);
+				});
+		return cookies;
+	}
+
+	/** {@code .numista.com} so cookies apply to {@code en.numista.com} and subdomains. */
+	private static String cookieDomainForUrl(String urlString) {
+		try {
+			String host = URI.create(urlString).getHost();
+			if (host == null || host.isBlank()) {
+				return null;
+			}
+			if (host.endsWith("numista.com")) {
+				return ".numista.com";
+			}
+			return host.startsWith(".") ? host : "." + host;
+		} catch (RuntimeException e) {
+			return null;
+		}
+	}
+
+	/**
+	 * Reuses one persistent Chromium profile so {@code cf_clearance} survives across requests.
+	 */
+	private static final class NumistaPlaywrightSession {
+
+		private static final Object LOCK = new Object();
+		private static final AtomicLong LAST_WARMUP_MS = new AtomicLong(0);
+		private static final long WARMUP_INTERVAL_MS = 30 * 60 * 1000L;
+
+		private static Playwright playwright;
+		private static BrowserContext context;
+		private static String appliedCookieHeader = "";
+
+		static {
+			Runtime.getRuntime().addShutdownHook(new Thread(NumistaPlaywrightSession::close, "numista-playwright-shutdown"));
+		}
+
+		static BrowserContext getContext() {
+			synchronized (LOCK) {
+				if (isContextAlive(context)) {
+					return context;
+				}
+				if (context != null) {
+					close();
+				}
+				initContext();
+				return context;
+			}
+		}
+
+		/**
+		 * {@link BrowserContext#browser()} is null for {@code launchPersistentContext}; probe lightly instead.
+		 */
+		private static boolean isContextAlive(BrowserContext ctx) {
+			if (ctx == null) {
+				return false;
+			}
+			try {
+				Browser browser = ctx.browser();
+				if (browser != null) {
+					return browser.isConnected();
+				}
+				ctx.pages();
+				return true;
+			} catch (PlaywrightException | NullPointerException e) {
+				return false;
+			}
+		}
+
+		static void applyCookies(BrowserContext ctx, String cookieHeader, String urlString) {
+			if (cookieHeader == null || cookieHeader.isBlank()) {
+				return;
+			}
+			synchronized (LOCK) {
+				if (cookieHeader.equals(appliedCookieHeader)) {
+					return;
+				}
+				List<Cookie> cookies = toPlaywrightCookies(cookieHeader, urlString);
+				if (!cookies.isEmpty()) {
+					ctx.addCookies(cookies);
+					appliedCookieHeader = cookieHeader;
+				}
+			}
+		}
+
+		static void markWarmedUp() {
+			LAST_WARMUP_MS.set(System.currentTimeMillis());
+		}
+
+		private static void initContext() {
+			close();
+			try {
+				Files.createDirectories(PLAYWRIGHT_PROFILE_DIR);
+			} catch (IOException e) {
+				throw new IllegalStateException("Failed to init Playwright profile directory", e);
+			}
+
+			playwright = Playwright.create();
+			context = playwright.chromium().launchPersistentContext(
+					PLAYWRIGHT_PROFILE_DIR,
+					new BrowserType.LaunchPersistentContextOptions()
+							.setHeadless(PLAYWRIGHT_HEADLESS)
+							.setJavaScriptEnabled(true)
+							.setUserAgent(
+									"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15")
+							.setArgs(List.of(
+									"--disable-blink-features=AutomationControlled")));
+
+			Map<String, String> headers = new HashMap<>();
+			headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+			headers.put("Accept-Language", "en-GB,en;q=0.9");
+			context.setExtraHTTPHeaders(headers);
+			appliedCookieHeader = "";
+
+			long sinceWarmup = System.currentTimeMillis() - LAST_WARMUP_MS.get();
+			if (sinceWarmup > WARMUP_INTERVAL_MS) {
+				Page warmup = context.newPage();
+				try {
+					navigate(warmup, NUMISTA_HOME_URL);
+					waitPastBotChallenge(warmup, NUMISTA_HOME_URL);
+					markWarmedUp();
+				} finally {
+					warmup.close();
+				}
+			}
+
+			log.info("Numista Playwright session started (headless={}, profile={})",
+					PLAYWRIGHT_HEADLESS, PLAYWRIGHT_PROFILE_DIR);
+		}
+
+		private static void close() {
+			synchronized (LOCK) {
+				if (context != null) {
+					try {
+						context.close();
+					} catch (PlaywrightException ignored) {
+					}
+					context = null;
+				}
+				if (playwright != null) {
+					try {
+						playwright.close();
+					} catch (PlaywrightException ignored) {
+					}
+					playwright = null;
+				}
+				appliedCookieHeader = "";
 			}
 		}
 	}
@@ -132,12 +492,12 @@ public class NumistaParseUtils {
 		}
 
 		if (option.text().isEmpty()) {
-			log.info("The " + searchQuery + " name is empty on the page");
+			numistaPage.getPipelineStepLogger().debugOrange("The " + searchQuery + " name is empty on the page");
 			return null;
 		}
 
 		if (option.attributes().get(key).isEmpty()) {
-			log.info("The " + searchQuery + " " + key + " is empty on the page");
+			numistaPage.getPipelineStepLogger().debugOrange("The " + searchQuery + " " + key + " is empty on the page");
 			return null;
 		}
 
@@ -154,7 +514,7 @@ public class NumistaParseUtils {
 		Element element = page.selectFirst(searchQuery);
 
 		if (element == null) {
-			log.info("Can't find " + searchQuery + " on the page");
+			numistaPage.getPipelineStepLogger().debugOrange("Can't find " + searchQuery + " on the page");
 			return null;
 		}
 
@@ -172,12 +532,12 @@ public class NumistaParseUtils {
 		}
 
 		if (option.text().isEmpty()) {
-			log.info("The " + searchQuery + " name is empty on the page");
+			numistaPage.getPipelineStepLogger().debugOrange("The " + searchQuery + " name is empty on the page");
 			return null;
 		}
 
 		if (option.attributes().get(key).isEmpty()) {
-			log.info("The " + searchQuery + " " + key + " is empty on the page");
+			numistaPage.getPipelineStepLogger().debugOrange("The " + searchQuery + " " + key + " is empty on the page");
 			return null;
 		}
 
@@ -208,14 +568,14 @@ public class NumistaParseUtils {
 	public static List<HashMap<String, String>> getAttributesWithTextSelectedOptions(Element element) {
 		if (element != null) {
 			return element.select("option").stream().filter(option -> option.attributes().hasKey("selected"))
-					.findFirst().map(option -> {
+					.map(option -> {
 						HashMap<String, String> hashMap = new HashMap<>();
 						hashMap.put("value", option.attributes().get("value"));
 						hashMap.put("text", option.text());
 						return hashMap;
-					}).stream().collect(Collectors.toList());
+					}).collect(Collectors.toList());
 		}
-		return null;
+		return List.of();
 	}
 
 	public static String getTagText(Element element) {
@@ -229,7 +589,7 @@ public class NumistaParseUtils {
 	 * Fetches content from the given URL and parses it as a JSON object.
 	 *
 	 * @param urlString  The URL to fetch JSON data from.
-	 * @param useCookies Whether to include the predefined COOKIE and USER_AGENT
+	 * @param useCookies Whether to include the configured Numista cookie and USER_AGENT
 	 *                   (useful for numista.com APIs).
 	 * @return A JsonObject if parsing is successful, otherwise null.
 	 */
@@ -241,9 +601,9 @@ public class NumistaParseUtils {
 			con.setRequestMethod("GET");
 			con.setRequestProperty("Accept", "application/json"); // Indicate we expect JSON
 
-			if (useCookies) {
+			if (useCookies && configuredUseCookies && !configuredNumistaCookie.isEmpty()) {
 				con.setRequestProperty("User-Agent", USER_AGENT);
-				con.setRequestProperty("Cookie", COOKIE); // Use with caution if the JSON source is not numista
+				con.setRequestProperty("Cookie", configuredNumistaCookie); // Use with caution if the JSON source is not numista
 			}
 
 			int responseCode = con.getResponseCode();
@@ -286,7 +646,7 @@ public class NumistaParseUtils {
 	 * Fetches content from the given URL and parses it as a JSON object.
 	 *
 	 * @param urlString  The URL to fetch JSON data from.
-	 * @param useCookies Whether to include the predefined COOKIE and USER_AGENT
+	 * @param useCookies Whether to include the configured Numista cookie and USER_AGENT
 	 *                   (useful for numista.com APIs).
 	 * @return A JsonObject if parsing is successful, otherwise null.
 	 */
@@ -298,9 +658,9 @@ public class NumistaParseUtils {
 			con.setRequestMethod("GET");
 			con.setRequestProperty("Accept", "application/json"); // Indicate we expect JSON
 
-			if (useCookies) {
+			if (useCookies && configuredUseCookies && !configuredNumistaCookie.isEmpty()) {
 				con.setRequestProperty("User-Agent", USER_AGENT);
-				con.setRequestProperty("Cookie", COOKIE); // Use with caution if the JSON source is not numista
+				con.setRequestProperty("Cookie", configuredNumistaCookie); // Use with caution if the JSON source is not numista
 			}
 
 			int responseCode = con.getResponseCode();

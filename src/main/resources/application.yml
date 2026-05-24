@@ -31,6 +31,23 @@ jwt:
   expiration: 3600000
   refresh-expiration: 86400000
 
+auth:
+  cookie:
+    secure: true
+    same-site: None
+
+# Numista scraping / HTTP (Cookie header for Playwright and JSON fetches)
+colligendis:
+  numista:
+    use-cookies: true
+    # Prefer environment variable so secrets are not committed: export NUMISTA_COOKIE='...'
+    cookie: ${NUMISTA_COOKIE:}
+    playwright:
+      # Per-phase wait while Cloudflare clears (ms). Override: -Dnumista.playwright.challenge-wait-ms=...
+      challenge-wait-ms: 180000
+      # When true, keep polling until the challenge page is gone (no timeout).
+      challenge-wait-forever: true
+
 logging:
   level:
     root: WARN
