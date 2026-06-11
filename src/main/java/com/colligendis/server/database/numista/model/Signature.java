@@ -17,5 +17,6 @@ public class Signature extends AbstractNode {
 	private String nid; // id
 	private String name; // text
 	private String pictureUrl; // image
+	private String pictureLocalPath;
 
 }

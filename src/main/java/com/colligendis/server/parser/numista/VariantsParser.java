@@ -1,5 +1,12 @@
 package com.colligendis.server.parser.numista;
 
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -33,6 +40,7 @@ import com.colligendis.server.database.numista.service.VariantService;
 import com.colligendis.server.database.result.CreateNodeExecutionStatus;
 import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
 import com.colligendis.server.database.result.FindExecutionStatus;
+import com.colligendis.server.database.result.UpdateExecutionStatus;
 import com.colligendis.server.parser.PauseLock;
 import com.colligendis.server.parser.numista.exception.ParserException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -50,6 +58,9 @@ public class VariantsParser extends Parser {
 	private static final PauseLock PAUSE_LOCK = new PauseLock("VariantsParser");
 	private static final ObjectMapper JSON = new ObjectMapper();
 	private static final Pattern DIGITS = Pattern.compile("\\d+");
+	private static final Path SIGNATURE_PICTURES_STORAGE_ROOT = Path
+			.of("/Users/kirillbobryakov/Coins/Numista/storage/signatures");
+	private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
 
 	private static final String ISSUING_ENTITIES_URL_PREFIX = "https://en.numista.com/catalogue/get_issuing_entities.php?prefill=&country=";
 	private static final String SEARCH_SIGNATURES_URL = "https://en.numista.com/catalogue/search_signatures.php?ie=%s&sie=&_type=query&term=&q=";
@@ -308,7 +319,7 @@ public class VariantsParser extends Parser {
 							.concatMap(nid -> signatureService.findByNid(nid, numistaPage.getPipelineStepLogger())
 									.flatMap(er -> {
 										if (er.getStatus().equals(FindExecutionStatus.FOUND)) {
-											return Mono.just(er.getNode());
+											return ensureSignaturePictureLocal(er.getNode(), null, numistaPage);
 										}
 										numistaPage.getPipelineStepLogger()
 												.warning("VariantsParser: signature nid {} not in database", nid);
@@ -436,19 +447,118 @@ public class VariantsParser extends Parser {
 			return Mono.empty();
 		}
 		String nid = String.valueOf(node.get("id").asInt());
+		String imageUrl = node.path("image").asText("");
 		return signatureService.findByNid(nid, numistaPage.getPipelineStepLogger())
 				.flatMap(er -> {
 					if (er.getStatus().equals(FindExecutionStatus.FOUND)) {
-						return Mono.<Void>empty();
+						return ensureSignaturePictureLocal(er.getNode(), imageUrl, numistaPage).then();
 					}
 					Signature s = new Signature();
 					s.setNid(nid);
 					s.setName(node.path("text").asText(""));
-					s.setPictureUrl(node.path("image").asText(""));
-					return signatureService.create(s, numistaPage.getNumistaParserUserMono(),
-							numistaPage.getPipelineStepLogger())
-							.flatMap(cr -> Mono.<Void>empty());
+					s.setPictureUrl(NumistaCatalogueImageUrls.toStoredPicturePath(imageUrl));
+					return Mono.fromCallable(() -> resolveOrDownloadSignaturePicture(s, imageUrl, numistaPage))
+							.subscribeOn(Schedulers.boundedElastic())
+							.flatMap(signature -> signatureService.create(signature, numistaPage.getNumistaParserUserMono(),
+									numistaPage.getPipelineStepLogger())
+									.flatMap(cr -> Mono.<Void>empty()));
 				});
+	}
+
+	private Mono<Signature> ensureSignaturePictureLocal(Signature signature, String pictureUrl,
+			NumistaPage numistaPage) {
+		String previousLocalPath = signature.getPictureLocalPath();
+		return Mono.fromCallable(() -> resolveOrDownloadSignaturePicture(signature, pictureUrl, numistaPage))
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(updated -> {
+					if (Objects.equals(previousLocalPath, updated.getPictureLocalPath())) {
+						return Mono.just(updated);
+					}
+					return signatureService
+							.update(updated, numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger())
+							.flatMap(er -> {
+								if (er.getStatus().equals(UpdateExecutionStatus.WAS_UPDATED)
+										|| er.getStatus().equals(UpdateExecutionStatus.NOTHING_TO_UPDATE)) {
+									return Mono.just(er.getNode());
+								}
+								numistaPage.getPipelineStepLogger().warning(
+										"VariantsParser: failed to update signature pictureLocalPath nid={}, status={}",
+										updated.getNid(), er.getStatus());
+								return Mono.just(updated);
+							});
+				});
+	}
+
+	private Signature resolveOrDownloadSignaturePicture(Signature signature, String pictureUrl,
+			NumistaPage numistaPage) {
+		String rawUrl = StringUtils.isNotBlank(pictureUrl) ? pictureUrl : signature.getPictureUrl();
+		if (StringUtils.isBlank(rawUrl)) {
+			return signature;
+		}
+		String storedPath = NumistaCatalogueImageUrls.toStoredPicturePath(rawUrl);
+		Path existingLocalPath = normalizeLocalPath(signature.getPictureLocalPath());
+		if (existingLocalPath != null && Files.exists(existingLocalPath) && Files.isRegularFile(existingLocalPath)) {
+			return signature;
+		}
+		String absoluteUrl = NumistaCatalogueImageUrls.toAbsolutePictureUrl(storedPath);
+		if (StringUtils.isBlank(absoluteUrl)) {
+			return signature;
+		}
+		try {
+			Files.createDirectories(SIGNATURE_PICTURES_STORAGE_ROOT);
+			String fileName = "signature_" + signature.getNid() + extensionFromUrl(absoluteUrl);
+			Path targetPath = SIGNATURE_PICTURES_STORAGE_ROOT.resolve(fileName).normalize();
+
+			HttpRequest request = HttpRequest.newBuilder(URI.create(absoluteUrl)).GET().build();
+			HttpResponse<byte[]> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofByteArray());
+			if (response.statusCode() >= 200 && response.statusCode() < 300 && response.body() != null
+					&& response.body().length > 0) {
+				Files.write(targetPath, response.body());
+				signature.setPictureUrl(storedPath);
+				signature.setPictureLocalPath(targetPath.toString());
+				numistaPage.getPipelineStepLogger().debugGreen("Signature picture downloaded to: {}", targetPath);
+			} else {
+				numistaPage.getPipelineStepLogger().warning(
+						"VariantsParser: failed to download signature picture nid={}, status={}, url={}",
+						signature.getNid(), response.statusCode(), absoluteUrl);
+			}
+		} catch (IOException | InterruptedException | IllegalArgumentException exception) {
+			if (exception instanceof InterruptedException) {
+				Thread.currentThread().interrupt();
+			}
+			numistaPage.getPipelineStepLogger().warning(
+					"VariantsParser: failed to store signature picture locally nid={}, url={}",
+					signature.getNid(), absoluteUrl, exception);
+		}
+		return signature;
+	}
+
+	private static Path normalizeLocalPath(String rawPath) {
+		if (StringUtils.isBlank(rawPath)) {
+			return null;
+		}
+		String value = rawPath.trim();
+		if (value.startsWith("../") || value.startsWith("http://") || value.startsWith("https://")) {
+			return null;
+		}
+		if (value.startsWith("file://")) {
+			value = value.substring("file://".length());
+		}
+		return Path.of(value).normalize();
+	}
+
+	private static String extensionFromUrl(String url) {
+		int query = url.indexOf('?');
+		String path = query >= 0 ? url.substring(0, query) : url;
+		int dot = path.lastIndexOf('.');
+		if (dot < 0 || dot == path.length() - 1) {
+			return ".jpg";
+		}
+		String ext = path.substring(dot).toLowerCase();
+		if (ext.matches("\\.(jpg|jpeg|png|gif|webp)")) {
+			return ext;
+		}
+		return ".jpg";
 	}
 
 	private Mono<Variant> linkSpecifiedMint(Variant variant, Element scope, NumistaPage numistaPage) {

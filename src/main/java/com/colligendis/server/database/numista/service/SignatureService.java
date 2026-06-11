@@ -8,6 +8,7 @@ import com.colligendis.server.database.numista.model.Signature;
 import com.colligendis.server.database.result.CreateNodeExecutionStatus;
 import com.colligendis.server.database.result.ExecutionResult;
 import com.colligendis.server.database.result.FindExecutionStatus;
+import com.colligendis.server.database.result.UpdateExecutionStatus;
 import com.colligendis.server.logger.BaseLogger;
 
 import reactor.core.publisher.Mono;
@@ -23,5 +24,13 @@ public class SignatureService extends AbstractService {
 
 	public Mono<ExecutionResult<Signature, FindExecutionStatus>> findByNid(String nid, BaseLogger baseLogger) {
 		return super.findNodeByUniquePropertyValue("nid", nid, Signature.LABEL, Signature.class, baseLogger);
+	}
+
+	public Mono<ExecutionResult<Signature, UpdateExecutionStatus>> update(Signature signature,
+			Mono<ColligendisUser> colligendisUserMono,
+			BaseLogger baseLogger) {
+		return colligendisUserMono
+				.flatMap(colligendisUser -> super.updateNodeProperties(signature, colligendisUser, Signature.class,
+						baseLogger));
 	}
 }
