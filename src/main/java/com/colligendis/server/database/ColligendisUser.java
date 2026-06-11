@@ -8,4 +8,6 @@ import lombok.EqualsAndHashCode;
 public class ColligendisUser extends AbstractUser {
 	public final static String LABEL = "COLLIGENDIS_USER";
 
+	/** Numista session cookie ({@code Cookie} header) for authenticated API calls. */
+	private String numistaCookie;
 }

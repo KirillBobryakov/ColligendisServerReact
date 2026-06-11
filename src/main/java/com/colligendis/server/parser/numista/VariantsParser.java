@@ -21,6 +21,7 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.springframework.stereotype.Component;
 
+import com.colligendis.server.database.ColligendisUser;
 import com.colligendis.server.database.numista.model.Catalogue;
 import com.colligendis.server.database.numista.model.CatalogueReference;
 import com.colligendis.server.database.numista.model.Issuer;
@@ -43,6 +44,8 @@ import com.colligendis.server.database.result.FindExecutionStatus;
 import com.colligendis.server.database.result.UpdateExecutionStatus;
 import com.colligendis.server.parser.PauseLock;
 import com.colligendis.server.parser.numista.exception.ParserException;
+import com.colligendis.server.util.web.WebPageClient;
+import com.colligendis.server.util.web.WebPageLoadException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -73,6 +76,7 @@ public class VariantsParser extends Parser {
 	private final CatalogueReferenceService catalogueReferenceService;
 	private final SignatureService signatureService;
 	private final IssuingEntityService issuingEntityService;
+	private final WebPageClient webPageClient;
 
 	@Override
 	protected Mono<NumistaPage> parse(NumistaPage numistaPage) {
@@ -157,26 +161,23 @@ public class VariantsParser extends Parser {
 			return Mono.empty();
 		}
 		return variantService.findByNid(variantNid, numistaPage.getPipelineStepLogger()).flatMap(er -> {
-			if (er.getStatus().equals(FindExecutionStatus.FOUND)) {
-				numistaPage.getPipelineStepLogger().info("Variant found: {}", er.getNode());
-				return Mono.just(er.getNode());
+			switch (er.getStatus()) {
+				case FOUND:
+					return Mono.just(er.getNode());
+				case NOT_FOUND:
+					return variantService
+							.create(new Variant(variantNid), numistaPage.getNumistaParserUserMono(),
+									numistaPage.getPipelineStepLogger())
+							.flatMap(cr -> {
+								if (cr.getStatus().equals(CreateNodeExecutionStatus.WAS_CREATED)) {
+									return Mono.just(cr.getNode());
+								}
+								return Mono.error(new ParserException("Failed to create Variant: " + cr.getStatus()));
+							});
+				default:
+					numistaPage.getPipelineStepLogger().error("Failed to find Variant: {}", er.getStatus());
+					return Mono.error(new ParserException("Failed to find Variant: " + er.getStatus()));
 			}
-			if (er.getStatus().equals(FindExecutionStatus.NOT_FOUND)) {
-				numistaPage.getPipelineStepLogger().info("Variant not found: {}", variantNid);
-				return variantService
-						.create(new Variant(variantNid), numistaPage.getNumistaParserUserMono(),
-								numistaPage.getPipelineStepLogger())
-						.flatMap(cr -> {
-							if (cr.getStatus().equals(CreateNodeExecutionStatus.WAS_CREATED)) {
-								numistaPage.getPipelineStepLogger().info("Variant created: {}", cr.getNode());
-								return Mono.just(cr.getNode());
-							}
-							numistaPage.getPipelineStepLogger().error("Failed to create Variant: {}", cr.getStatus());
-							return Mono.error(new ParserException("Failed to create Variant: " + cr.getStatus()));
-						});
-			}
-			numistaPage.getPipelineStepLogger().error("Failed to find Variant: {}", er.getStatus());
-			return Mono.error(new ParserException("Failed to find Variant: " + er.getStatus()));
 		});
 	}
 
@@ -358,69 +359,58 @@ public class VariantsParser extends Parser {
 
 	private Mono<Void> syncIssuingEntitiesAndSignatures(Issuer issuer, NumistaPage numistaPage) {
 		String url = ISSUING_ENTITIES_URL_PREFIX + issuer.getNumistaCode();
-		return Mono.fromCallable(() -> NumistaParseUtils.loadPageByURL(url))
-				.subscribeOn(Schedulers.boundedElastic())
-				.flatMap(doc -> {
-					if (doc == null) {
-						numistaPage.getPipelineStepLogger().error("VariantsParser: can't load {}", url);
-						return Mono.empty();
-					}
-					return Flux.fromIterable(doc.select("option[value]"))
-							.filter(opt -> StringUtils.isNotBlank(opt.attr("value")))
-							.concatMap(opt -> issuingEntityService.findByNidWithCreate(opt.attr("value"), opt.text(),
+		return loadHtmlPage(url, numistaPage)
+				.flatMap(doc -> Flux.fromIterable(doc.select("option[value]"))
+						.filter(opt -> StringUtils.isNotBlank(opt.attr("value")))
+						.concatMap(opt -> issuingEntityService.findByNidWithCreate(opt.attr("value"), opt.text(),
+								numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger())
+								.flatMap(er -> {
+									if (er.getStatus().equals(FindExecutionStatus.FOUND)
+											|| er.getStatus().equals(CreateNodeExecutionStatus.WAS_CREATED)) {
+										return Mono.just(er.getNode());
+									}
+									return Mono.<IssuingEntity>empty();
+								}))
+						.collectList()
+						.flatMap(entities -> {
+							if (entities.isEmpty()) {
+								return Mono.empty();
+							}
+							return issuingEntityService.setIssuer(issuer, entities,
 									numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger())
-									.flatMap(er -> {
-										if (er.getStatus().equals(FindExecutionStatus.FOUND)
-												|| er.getStatus().equals(CreateNodeExecutionStatus.WAS_CREATED)) {
-											return Mono.just(er.getNode());
+									.flatMap(setI -> {
+										if (!setI.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)
+												&& !setI.getStatus()
+														.equals(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)) {
+											numistaPage.getPipelineStepLogger().error(
+													"VariantsParser: setIssuer status {}", setI.getStatus());
 										}
-										return Mono.<IssuingEntity>empty();
-									}))
-							.collectList()
-							.flatMap(entities -> {
-								if (entities.isEmpty()) {
-									return Mono.empty();
-								}
-								return issuingEntityService.setIssuer(issuer, entities,
-										numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger())
-										.flatMap(setI -> {
-											if (!setI.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)
-													&& !setI.getStatus()
-															.equals(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)) {
-												numistaPage.getPipelineStepLogger().error(
-														"VariantsParser: setIssuer status {}", setI.getStatus());
-											}
-											return nTypeService.setIssuingEntities(numistaPage.nType, entities,
-													numistaPage.getNumistaParserUserMono(),
-													numistaPage.getPipelineStepLogger());
-										})
-										.flatMap(setN -> {
-											if (!setN.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)
-													&& !setN.getStatus()
-															.equals(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)) {
-												numistaPage.getPipelineStepLogger().error(
-														"VariantsParser: setIssuingEntities status {}",
-														setN.getStatus());
-											}
-											return Flux.fromIterable(entities)
-													.concatMap(ie -> loadSignaturesForIssuingEntity(ie, numistaPage))
-													.then();
-										});
-							});
-				});
+										return nTypeService.setIssuingEntities(numistaPage.nType, entities,
+												numistaPage.getNumistaParserUserMono(),
+												numistaPage.getPipelineStepLogger());
+									})
+									.flatMap(setN -> {
+										if (!setN.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)
+												&& !setN.getStatus()
+														.equals(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)) {
+											numistaPage.getPipelineStepLogger().error(
+													"VariantsParser: setIssuingEntities status {}",
+													setN.getStatus());
+										}
+										return Flux.fromIterable(entities)
+												.concatMap(ie -> loadSignaturesForIssuingEntity(ie, numistaPage))
+												.then();
+									});
+						}));
 	}
 
 	private Mono<Void> loadSignaturesForIssuingEntity(IssuingEntity ie, NumistaPage numistaPage) {
 		String url = String.format(SEARCH_SIGNATURES_URL, ie.getNid());
-		return Mono.fromCallable(() -> NumistaParseUtils.loadPageByURL(url))
-				.subscribeOn(Schedulers.boundedElastic())
-				.flatMap(doc -> {
-					if (doc == null) {
-						return Mono.empty();
-					}
+		return loadJsonPage(url, numistaPage)
+				.flatMap(json -> {
 					List<JsonNode> nodes;
 					try {
-						nodes = parseSignatureJson(doc.body().text());
+						nodes = parseSignatureJson(json);
 					} catch (Exception e) {
 						numistaPage.getPipelineStepLogger().error("VariantsParser: bad JSON from {}", url);
 						return Mono.empty();
@@ -429,6 +419,35 @@ public class VariantsParser extends Parser {
 							.concatMap(node -> upsertSignatureFromJson(node, numistaPage))
 							.then();
 				});
+	}
+
+	private Mono<Document> loadHtmlPage(String url, NumistaPage numistaPage) {
+		return numistaPage.getNumistaParserUserMono()
+				.map(VariantsParser::resolveCookie)
+				.defaultIfEmpty("")
+				.flatMap(cookie -> webPageClient.loadPageDocument(url, cookie))
+				.onErrorResume(WebPageLoadException.class, e -> {
+					numistaPage.getPipelineStepLogger().error("VariantsParser: can't load {}: {}", url, e.getMessage());
+					return Mono.empty();
+				});
+	}
+
+	private Mono<String> loadJsonPage(String url, NumistaPage numistaPage) {
+		return numistaPage.getNumistaParserUserMono()
+				.map(VariantsParser::resolveCookie)
+				.defaultIfEmpty("")
+				.flatMap(cookie -> webPageClient.loadJson(url, cookie))
+				.onErrorResume(WebPageLoadException.class, e -> {
+					numistaPage.getPipelineStepLogger().error("VariantsParser: can't load {}: {}", url, e.getMessage());
+					return Mono.empty();
+				});
+	}
+
+	private static String resolveCookie(ColligendisUser user) {
+		if (user != null && StringUtils.isNotBlank(user.getNumistaCookie())) {
+			return user.getNumistaCookie().strip();
+		}
+		return "";
 	}
 
 	private List<JsonNode> parseSignatureJson(String body) throws Exception {
@@ -648,10 +667,10 @@ public class VariantsParser extends Parser {
 	private Mono<Variant> resolveAndLinkCatalogueReferences(Variant variant, Element scope,
 			NumistaPage numistaPage) {
 		List<CatalogueRefRow> rows = List.of(
-				new CatalogueRefRow("first_ref1", "first_number1"),
-				new CatalogueRefRow("second_ref1", "second_number1"),
-				new CatalogueRefRow("third_ref1", "third_number1"),
-				new CatalogueRefRow("fourth_ref1", "fourth_number1"));
+				new CatalogueRefRow("first_ref", "first_number"),
+				new CatalogueRefRow("second_ref", "second_number"),
+				new CatalogueRefRow("third_ref", "third_number"),
+				new CatalogueRefRow("fourth_ref", "fourth_number"));
 		return Flux.fromIterable(rows)
 				.concatMap(row -> processCatalogueRow(scope, row, numistaPage))
 				.filter(Objects::nonNull)
@@ -677,8 +696,8 @@ public class VariantsParser extends Parser {
 	}
 
 	private Mono<CatalogueReference> processCatalogueRow(Element scope, CatalogueRefRow row, NumistaPage numistaPage) {
-		Element sel = scope.selectFirst("select[name=" + row.refSelectName + "]");
-		Element num = scope.selectFirst("input[name=" + row.numberInputName + "]");
+		Element sel = scope.selectFirst("select[name^=\"" + row.refSelectName + "\"]");
+		Element num = scope.selectFirst("input[name^=\"" + row.numberInputName + "\"]");
 		if (sel == null || num == null) {
 			return Mono.empty();
 		}
@@ -686,7 +705,7 @@ public class VariantsParser extends Parser {
 		if (opt == null) {
 			return Mono.empty();
 		}
-		String catalogueCode = opt.attr("value");
+		String catalogueCode = opt.text();
 		String numberVal = NumistaParseUtils.getAttribute(num, "value");
 		if (StringUtils.isBlank(numberVal)) {
 			return Mono.empty();

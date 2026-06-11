@@ -38,6 +38,12 @@ auth:
 
 # Numista scraping / HTTP (Cookie header for Playwright and JSON fetches)
 colligendis:
+  web:
+    client:
+      use-cookies: true
+      require-cookie: false
+      # Accept header preset: html | json | html-and-json (or a raw value, e.g. application/json)
+      accept: html
   numista:
     use-cookies: true
     # Prefer environment variable so secrets are not committed: export NUMISTA_COOKIE='...'
