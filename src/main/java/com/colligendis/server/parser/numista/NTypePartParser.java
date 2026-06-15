@@ -5,7 +5,15 @@ import com.colligendis.server.database.numista.service.NTypePartService;
 
 import java.util.HashMap;
 import java.util.List;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
+import org.apache.commons.lang3.StringUtils;
 import org.jsoup.nodes.Element;
 import org.springframework.stereotype.Component;
 
@@ -26,6 +34,10 @@ import reactor.core.publisher.Mono;
 @RequiredArgsConstructor
 public class NTypePartParser extends Parser {
 
+	private static final Path NTYPE_PICTURES_STORAGE_ROOT = Path
+			.of("/Users/kirillbobryakov/Coins/Numista/storage/images/ntypes");
+	private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
+
 	private final NTypePartService nTypePartService;
 	private final NTypeService nTypeService;
 	private final ArtistService artistService;
@@ -43,85 +55,142 @@ public class NTypePartParser extends Parser {
 	}
 
 	private Mono<NumistaPage> parseNTypePart(NumistaPage numistaPage, PART_TYPE partType) {
-		return Mono.defer(() -> {
-
-			return nTypeService.getNTypePart(numistaPage.nType, partType, numistaPage.getPipelineStepLogger())
-					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
-							numistaPage.getPipelineStepLogger().debugGreen("NTypePart found: {}", partType);
-							return Mono.just(executionResult.getNode());
-						} else if (executionResult.getStatus().equals(FindExecutionStatus.NOT_FOUND)) {
-							numistaPage.getPipelineStepLogger().debugOrange("NTypePart not found, creating it: {}",
-									partType);
-							return nTypePartService.create(partType, numistaPage.getNumistaParserUserMono(),
-									numistaPage.getPipelineStepLogger())
-									.flatMap(createdExecutionResult -> {
-										if (createdExecutionResult.getStatus()
-												.equals(CreateNodeExecutionStatus.WAS_CREATED)) {
-											numistaPage.getPipelineStepLogger().debugGreen(
-													"NTypePart created, setting relationship between NType and NTypePart: {}",
-													partType);
-											return nTypeService
-													.setNTypePart(numistaPage.nType, createdExecutionResult.getNode(),
-															numistaPage.getNumistaParserUserMono(),
-															numistaPage.getPipelineStepLogger())
-													.flatMap(setExecutionResult -> {
-														if (setExecutionResult.getStatus()
-																.equals(CreateRelationshipExecutionStatus.WAS_CREATED)) {
-															numistaPage.getPipelineStepLogger().debugGreen(
-																	"Relationship between NType {} and NTypePart {} set successfully",
-																	numistaPage.nType.getNid(),
-																	createdExecutionResult.getNode().getPartType());
-															return Mono.just(createdExecutionResult.getNode());
-														} else {
-															numistaPage.getPipelineStepLogger().error(
-																	"Failed to set relationship between NType and NTypePart: {}",
-																	setExecutionResult.getStatus());
-															setExecutionResult
-																	.logError(numistaPage.getPipelineStepLogger());
-															return Mono.error(new ParserException(
-																	"Failed to set relationship between NType and NTypePart: "
-																			+ setExecutionResult.getStatus()));
-														}
-													});
-										} else {
-											numistaPage.getPipelineStepLogger().error("Failed to create NTypePart: {}",
-													createdExecutionResult.getStatus());
-											return Mono.error(new ParserException("Failed to create NTypePart: "
-													+ createdExecutionResult.getStatus()));
-										}
-									});
-						} else {
+		return Mono.defer(() -> parseNTypePartFromPage(numistaPage, partType)
+				.flatMap(draft -> nTypeService.getNTypePart(numistaPage.nType, partType,
+						numistaPage.getPipelineStepLogger())
+						.flatMap(executionResult -> {
+							if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
+								numistaPage.getPipelineStepLogger().debugGreen("NTypePart found: {}", partType);
+								return persistParsedNTypePart(draft, executionResult.getNode(), numistaPage);
+							}
+							if (executionResult.getStatus().equals(FindExecutionStatus.NOT_FOUND)) {
+								if (!hasParsedContent(draft)) {
+									numistaPage.getPipelineStepLogger().debugOrange(
+											"NTypePart has no page data, skipping creation: {}", partType);
+									return Mono.just(numistaPage);
+								}
+								return createNTypePartAndPersist(draft, numistaPage);
+							}
 							numistaPage.getPipelineStepLogger().error("Failed to get NTypePart: {}",
 									executionResult.getStatus());
 							executionResult.logError(numistaPage.getPipelineStepLogger());
 							return Mono.error(
 									new ParserException("Failed to get NTypePart: " + executionResult.getStatus()));
-						}
-					})
-					.flatMap(nTypePart -> parseEngravers(nTypePart, numistaPage))
-					.flatMap(nTypePart -> parseDesigners(nTypePart, numistaPage))
-					.flatMap(nTypePart -> parseDescription(nTypePart, numistaPage))
-					.flatMap(nTypePart -> parseLettering(nTypePart, numistaPage))
-					.flatMap(nTypePart -> parseScripts(nTypePart, numistaPage))
-					.flatMap(nTypePart -> parseUnabridgedLegend(nTypePart, numistaPage))
-					.flatMap(nTypePart -> parseLetteringTranslation(nTypePart, numistaPage))
-					.flatMap(nTypePart -> parsePicture(nTypePart, numistaPage))
-					.flatMap(nTypePart -> nTypePartService.update(nTypePart, numistaPage.getNumistaParserUserMono(),
-							numistaPage.getPipelineStepLogger()))
-					.then(Mono.defer(() -> Mono.just(numistaPage)));
+						})));
+	}
 
-			// return parseEngravers(numistaPage, partType)
-			// .flatMap(parsedNumistaPage -> parseDesigners(parsedNumistaPage, partType))
-			// .flatMap(parsedNumistaPage -> parseDescription(parsedNumistaPage, partType))
-			// .flatMap(parsedNumistaPage -> parseLettering(parsedNumistaPage, partType))
-			// .flatMap(parsedNumistaPage -> parseScripts(parsedNumistaPage, partType))
-			// .flatMap(parsedNumistaPage -> parseUnabridgedLegend(parsedNumistaPage,
-			// partType))
-			// .flatMap(parsedNumistaPage -> parseLetteringTranslation(parsedNumistaPage,
-			// partType))
-			// .flatMap(parsedNumistaPage -> parsePicture(parsedNumistaPage, partType));
-		});
+	private Mono<NTypePart> parseNTypePartFromPage(NumistaPage numistaPage, PART_TYPE partType) {
+		NTypePart draft = new NTypePart(partType);
+		return Mono.just(draft)
+				.flatMap(part -> parseEngravers(part, numistaPage))
+				.flatMap(part -> parseDesigners(part, numistaPage))
+				.flatMap(part -> parseDescription(part, numistaPage))
+				.flatMap(part -> parseLettering(part, numistaPage))
+				.flatMap(part -> parseScripts(part, numistaPage))
+				.flatMap(part -> parseUnabridgedLegend(part, numistaPage))
+				.flatMap(part -> parseLetteringTranslation(part, numistaPage))
+				.flatMap(part -> parsePicture(part, numistaPage));
+	}
+
+	private boolean hasParsedContent(NTypePart draft) {
+		return StringUtils.isNotBlank(draft.getDescription())
+				|| StringUtils.isNotBlank(draft.getLettering())
+				|| StringUtils.isNotBlank(draft.getUnabridgedLegend())
+				|| StringUtils.isNotBlank(draft.getLetteringTranslation())
+				|| StringUtils.isNotBlank(draft.getPicture())
+				|| StringUtils.isNotBlank(draft.getPictureLocalPath())
+				|| (draft.getEngravers() != null && !draft.getEngravers().isEmpty())
+				|| (draft.getDesigners() != null && !draft.getDesigners().isEmpty())
+				|| (draft.getLetteringScripts() != null && !draft.getLetteringScripts().isEmpty());
+	}
+
+	private Mono<NumistaPage> createNTypePartAndPersist(NTypePart draft, NumistaPage numistaPage) {
+		PART_TYPE partType = draft.getPartType();
+		numistaPage.getPipelineStepLogger().debugOrange("NTypePart not found, creating it: {}", partType);
+		return nTypePartService.create(partType, numistaPage.getNumistaParserUserMono(),
+				numistaPage.getPipelineStepLogger())
+				.flatMap(createdExecutionResult -> {
+					if (!createdExecutionResult.getStatus().equals(CreateNodeExecutionStatus.WAS_CREATED)) {
+						numistaPage.getPipelineStepLogger().error("Failed to create NTypePart: {}",
+								createdExecutionResult.getStatus());
+						return Mono.error(new ParserException(
+								"Failed to create NTypePart: " + createdExecutionResult.getStatus()));
+					}
+					numistaPage.getPipelineStepLogger().debugGreen(
+							"NTypePart created, setting relationship between NType and NTypePart: {}", partType);
+					NTypePart created = createdExecutionResult.getNode();
+					return nTypeService.setNTypePart(numistaPage.nType, created,
+							numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger())
+							.flatMap(setExecutionResult -> {
+								if (!setExecutionResult.getStatus()
+										.equals(CreateRelationshipExecutionStatus.WAS_CREATED)) {
+									numistaPage.getPipelineStepLogger().error(
+											"Failed to set relationship between NType and NTypePart: {}",
+											setExecutionResult.getStatus());
+									setExecutionResult.logError(numistaPage.getPipelineStepLogger());
+									return Mono.error(new ParserException(
+											"Failed to set relationship between NType and NTypePart: "
+													+ setExecutionResult.getStatus()));
+								}
+								numistaPage.getPipelineStepLogger().debugGreen(
+										"Relationship between NType {} and NTypePart {} set successfully",
+										numistaPage.nType.getNid(), created.getPartType());
+								return persistParsedNTypePart(draft, created, numistaPage);
+							});
+				});
+	}
+
+	private Mono<NumistaPage> persistParsedNTypePart(NTypePart draft, NTypePart nTypePart, NumistaPage numistaPage) {
+		applyDraftProperties(draft, nTypePart);
+		return setRelationshipsFromDraft(draft, nTypePart, numistaPage)
+				.flatMap(updated -> nTypePartService.update(updated, numistaPage.getNumistaParserUserMono(),
+						numistaPage.getPipelineStepLogger()))
+				.thenReturn(numistaPage);
+	}
+
+	private void applyDraftProperties(NTypePart draft, NTypePart target) {
+		target.setDescription(draft.getDescription());
+		target.setLettering(draft.getLettering());
+		target.setUnabridgedLegend(draft.getUnabridgedLegend());
+		target.setLetteringTranslation(draft.getLetteringTranslation());
+		target.setPicture(draft.getPicture());
+		target.setPictureLocalPath(draft.getPictureLocalPath());
+	}
+
+	private Mono<NTypePart> setRelationshipsFromDraft(NTypePart draft, NTypePart nTypePart, NumistaPage numistaPage) {
+		return nTypePartService.setEngravers(nTypePart, draft.getEngravers(), numistaPage.getNumistaParserUserMono(),
+				numistaPage.getPipelineStepLogger())
+				.flatMap(executionResult -> {
+					switch (executionResult.getStatus()) {
+						case WAS_CREATED, IS_ALREADY_EXISTS:
+							return Mono.just(nTypePart);
+						default:
+							return Mono.error(
+									new ParserException("Failed to set engravers: " + executionResult.getStatus()));
+					}
+				})
+				.flatMap(part -> nTypePartService.setDesigners(part, draft.getDesigners(),
+						numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger()))
+				.flatMap(executionResult -> {
+					switch (executionResult.getStatus()) {
+						case WAS_CREATED, IS_ALREADY_EXISTS:
+							return Mono.just(nTypePart);
+						default:
+							return Mono.error(
+									new ParserException("Failed to set designers: " + executionResult.getStatus()));
+					}
+				})
+				.flatMap(part -> nTypePartService.setLetteringScripts(part, draft.getLetteringScripts(),
+						numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger()))
+				.flatMap(executionResult -> {
+					switch (executionResult.getStatus()) {
+						case WAS_CREATED, IS_ALREADY_EXISTS:
+							return Mono.just(nTypePart);
+						default:
+							return Mono.error(new ParserException(
+									"Failed to set lettering scripts: " + executionResult.getStatus()));
+					}
+				});
 	}
 
 	private Mono<NTypePart> parseEngravers(NTypePart nTypePart, NumistaPage numistaPage) {
@@ -129,10 +198,10 @@ public class NTypePartParser extends Parser {
 			final String engraversTag;
 			switch (nTypePart.getPartType()) {
 				case OBVERSE:
-					engraversTag = "#graveur_avers";
+					engraversTag = "#engravers_obverse";
 					break;
 				case REVERSE:
-					engraversTag = "#graveur_revers";
+					engraversTag = "#engravers_reverse";
 					break;
 				case EDGE, WATERMARK:
 					return Mono.just(nTypePart);
@@ -142,22 +211,18 @@ public class NTypePartParser extends Parser {
 
 			List<String> engravers = NumistaParseUtils
 					.getTextsSelectedOptions(numistaPage.page.selectFirst(engraversTag));
+			if (engravers == null || engravers.isEmpty()) {
+				return Mono.just(nTypePart);
+			}
 
 			return Flux.fromIterable(engravers)
 					.flatMap(engraver -> artistService.findByName(engraver, numistaPage.getPipelineStepLogger()))
 					.filter(executionResult -> executionResult.getStatus().equals(FindExecutionStatus.FOUND))
 					.map(executionResult -> executionResult.getNode())
 					.collectList()
-					.flatMap(artists -> nTypePartService.setEngravers(nTypePart, artists,
-							numistaPage.getNumistaParserUserMono(),
-							numistaPage.getPipelineStepLogger()))
-					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)) {
-							return Mono.just(nTypePart);
-						} else {
-							return Mono.error(
-									new ParserException("Failed to set engravers: " + executionResult.getStatus()));
-						}
+					.map(artists -> {
+						nTypePart.setEngravers(artists);
+						return nTypePart;
 					});
 
 		});
@@ -169,10 +234,10 @@ public class NTypePartParser extends Parser {
 			String designersTag = null;
 			switch (nTypePart.getPartType()) {
 				case OBVERSE:
-					designersTag = "#designer_avers";
+					designersTag = "#designers_obverse";
 					break;
 				case REVERSE:
-					designersTag = "#designer_revers";
+					designersTag = "#designers_reverse";
 					break;
 				case EDGE, WATERMARK:
 					return Mono.just(nTypePart);
@@ -181,22 +246,18 @@ public class NTypePartParser extends Parser {
 			}
 			List<String> designers = NumistaParseUtils
 					.getTextsSelectedOptions(numistaPage.page.selectFirst(designersTag));
+			if (designers == null || designers.isEmpty()) {
+				return Mono.just(nTypePart);
+			}
 
 			return Flux.fromIterable(designers)
 					.flatMap(designer -> artistService.findByName(designer, numistaPage.getPipelineStepLogger()))
 					.filter(executionResult -> executionResult.getStatus().equals(FindExecutionStatus.FOUND))
 					.map(executionResult -> executionResult.getNode())
 					.collectList()
-					.flatMap(designersList -> nTypePartService.setDesigners(nTypePart, designersList,
-							numistaPage.getNumistaParserUserMono(),
-							numistaPage.getPipelineStepLogger()))
-					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)) {
-							return Mono.just(nTypePart);
-						} else {
-							return Mono.error(
-									new ParserException("Failed to set designers: " + executionResult.getStatus()));
-						}
+					.map(designersList -> {
+						nTypePart.setDesigners(designersList);
+						return nTypePart;
 					});
 		});
 	}
@@ -276,22 +337,18 @@ public class NTypePartParser extends Parser {
 
 			List<HashMap<String, String>> scripts = NumistaParseUtils.getAttributesWithTextSelectedOptions(
 					numistaPage.page.selectFirst(scriptsTag));
+			if (scripts == null || scripts.isEmpty()) {
+				return Mono.just(nTypePart);
+			}
 			return Flux.fromIterable(scripts)
 					.flatMap(script -> letteringScriptService.findByNid(script.get("value"),
 							numistaPage.getPipelineStepLogger()))
 					.filter(executionResult -> executionResult.getStatus().equals(FindExecutionStatus.FOUND))
 					.map(executionResult -> executionResult.getNode())
 					.collectList()
-					.flatMap(letteringScripts -> nTypePartService.setLetteringScripts(nTypePart, letteringScripts,
-							numistaPage.getNumistaParserUserMono(),
-							numistaPage.getPipelineStepLogger()))
-					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)) {
-							return Mono.just(nTypePart);
-						} else {
-							return Mono.error(new ParserException(
-									"Failed to set lettering scripts: " + executionResult.getStatus()));
-						}
+					.map(letteringScripts -> {
+						nTypePart.setLetteringScripts(letteringScripts);
+						return nTypePart;
 					});
 		});
 	}
@@ -359,7 +416,7 @@ public class NTypePartParser extends Parser {
 					pictureTag = "fieldset:contains(Reverse (back))";
 					break;
 				case EDGE:
-					pictureTag = "fieldset>legend:containsOwn(Edge)";
+					pictureTag = "fieldset:has(legend:matchesOwn(^Edge$))";
 					break;
 				case WATERMARK:
 					pictureTag = "fieldset:contains(Watermark)";
@@ -375,9 +432,51 @@ public class NTypePartParser extends Parser {
 
 			String picture = NumistaParseUtils.getAttribute(pictureElement.selectFirst("a[target=_blank]"),
 					"href");
+			picture = NumistaCatalogueImageUrls.toStoredPicturePath(picture);
+			String pictureAbsoluteUrl = NumistaCatalogueImageUrls.toAbsolutePictureUrl(picture);
 
 			numistaPage.getPipelineStepLogger().debugGreen("Picture set on: {}", picture);
 			nTypePart.setPicture(picture);
+
+			try {
+				String issuerNumistaCode = numistaPage.getIssuer() != null
+						&& numistaPage.getIssuer().getNumistaCode() != null
+								? numistaPage.getIssuer().getNumistaCode().trim()
+								: "";
+				if (issuerNumistaCode.isEmpty()) {
+					issuerNumistaCode = "unknown_issuer";
+				}
+
+				Path issuerDir = NTYPE_PICTURES_STORAGE_ROOT.resolve(issuerNumistaCode);
+				Files.createDirectories(issuerDir);
+
+				String fileName = "nid_" + numistaPage.nType.getNid() + "_" + nTypePart.getPartType() + ".jpg";
+				Path pictureLocalPath = issuerDir.resolve(fileName);
+
+				if (Files.exists(pictureLocalPath)) {
+					nTypePart.setPictureLocalPath(pictureLocalPath.toString());
+					return Mono.just(nTypePart);
+				}
+
+				HttpRequest request = HttpRequest.newBuilder(URI.create(pictureAbsoluteUrl)).GET().build();
+				HttpResponse<byte[]> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofByteArray());
+
+				if (response.statusCode() >= 200 && response.statusCode() < 300) {
+					Files.write(pictureLocalPath, response.body());
+					nTypePart.setPictureLocalPath(pictureLocalPath.toString());
+					numistaPage.getPipelineStepLogger().debugGreen("Picture downloaded to: {}", pictureLocalPath);
+				} else {
+					numistaPage.getPipelineStepLogger().warning("Failed to download picture. URL: {}, status: {}",
+							pictureAbsoluteUrl, response.statusCode());
+				}
+			} catch (IOException | InterruptedException | IllegalArgumentException exception) {
+				if (exception instanceof InterruptedException) {
+					Thread.currentThread().interrupt();
+				}
+				numistaPage.getPipelineStepLogger().warning("Failed to store picture locally from URL: {}",
+						pictureAbsoluteUrl, exception);
+			}
+
 			return Mono.just(nTypePart);
 		});
 	}
