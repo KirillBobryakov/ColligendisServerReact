@@ -18,6 +18,11 @@ Use these defaults for all changes in this repository:
 - Add or update DTOs/entities carefully to avoid breaking JSON/API contracts.
 - Favor clear method names and small methods over clever abstractions.
 
+## Git Commits
+
+- When the user asks to commit, read `.cursor/skills/git-commit/SKILL.md` and write Conventional Commits messages (`type(scope): subject`).
+- Follow the repository git safety protocol (`git status`, `git diff`, `git log`); only commit when explicitly requested.
+
 ## Safety and Validation
 
 - Run focused checks after meaningful edits (tests or build task when feasible).
