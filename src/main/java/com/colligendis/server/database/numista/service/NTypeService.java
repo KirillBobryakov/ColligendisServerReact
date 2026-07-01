@@ -1,8 +1,12 @@
 package com.colligendis.server.database.numista.service;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import com.colligendis.server.database.AbstractNode;
 import com.colligendis.server.database.AbstractService;
@@ -34,11 +38,14 @@ import com.colligendis.server.database.result.UpdateExecutionStatus;
 import com.colligendis.server.logger.BaseLogger;
 
 import lombok.extern.slf4j.Slf4j;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @Service
 @Slf4j
 public class NTypeService extends AbstractService {
+
+	private static final int LINK_NIDS_BATCH_SIZE = 500;
 
 	public Mono<ExecutionResult<NType, CreateNodeExecutionStatus>> create(NType nType,
 			Mono<ColligendisUser> colligendisUserMono,
@@ -92,6 +99,29 @@ public class NTypeService extends AbstractService {
 		return colligendisUserMono
 				.flatMap(colligendisUser -> super.createUniqueTargetedRelationship(nType, issuer, NType.ISSUED_BY,
 						colligendisUser, baseLogger));
+	}
+
+	/**
+	 * Ensures {@link NType} nodes exist for each nid and links them to the issuer via
+	 * {@link NType#ISSUED_BY} in batched Cypher writes (one round-trip per batch).
+	 */
+	public Mono<Integer> linkNidsToIssuer(Issuer issuer, List<String> nids,
+			Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
+		if (issuer == null || !StringUtils.hasText(issuer.getUuid()) || nids == null || nids.isEmpty()) {
+			return Mono.just(0);
+		}
+
+		final List<String> sanitizedNids = nids.stream()
+				.filter(nid -> nid != null && !nid.isBlank())
+				.distinct()
+				.toList();
+		if (sanitizedNids.isEmpty()) {
+			return Mono.just(0);
+		}
+
+		return colligendisUserMono.flatMap(user -> Flux.fromIterable(partition(sanitizedNids, LINK_NIDS_BATCH_SIZE))
+				.concatMap(batch -> linkNidsToIssuerBatch(issuer.getUuid(), batch, user, baseLogger))
+				.reduce(0, Integer::sum));
 	}
 
 	public Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> setRulingAuthorities(NType nType,
@@ -222,6 +252,74 @@ public class NTypeService extends AbstractService {
 		return colligendisUserMono
 				.flatMap(colligendisUser -> super.createUniqueOutgoingRelationships(nType, variants,
 						Variant.class, NType.HAS_VARIANT, colligendisUser, baseLogger));
+	}
+
+	public Flux<ExecutionResult<NType, FindExecutionStatus>> getAllNTypesByIssuer(Issuer issuer,
+			BaseLogger baseLogger) {
+		return super.getAllSourceNodesWithRelationshipType(issuer, NType.ISSUED_BY, NType.class, baseLogger);
+	}
+
+	private Mono<Integer> linkNidsToIssuerBatch(String issuerUuid, List<String> nids, ColligendisUser user,
+			BaseLogger baseLogger) {
+		final String deletedRelationshipType = NType.ISSUED_BY + DELETED_RELATIONSHIP_TYPE_POSTFIX;
+		final String query = String.format(
+				"""
+						MATCH (issuer:%s {uuid: $issuerUuid})
+						WHERE NONE(l IN labels(issuer) WHERE l ENDS WITH '%s' OR l ENDS WITH '%s')
+						WITH issuer
+						UNWIND $nids AS nid
+						WITH issuer, nid
+						WHERE nid IS NOT NULL AND trim(toString(nid)) <> ''
+						MERGE (n:%s {nid: nid})
+						ON CREATE SET n.uuid = randomUUID(),
+						              n.createdAt = datetime({ timezone: '+03:00' }),
+						              n.createdBy = $createdBy
+						WITH n, issuer
+						OPTIONAL MATCH (n)-[r:%s]->(oldIssuer:%s)
+						WHERE oldIssuer.uuid <> issuer.uuid
+						CALL (n, r, oldIssuer) {
+						    WITH n, r, oldIssuer
+						    WHERE oldIssuer IS NOT NULL
+						    CREATE (n)-[r2:%s]->(oldIssuer)
+						    SET r2 = properties(r),
+						        r2.deletedAt = datetime({ timezone: '+03:00' }),
+						        r2.deletedBy = $deletedBy
+						    DELETE r
+						}
+						WITH n, issuer
+						MERGE (n)-[nr:%s]->(issuer)
+						ON CREATE SET nr.createdAt = datetime({ timezone: '+03:00' }),
+						              nr.createdBy = $createdBy
+						RETURN count(n) AS linkedCount
+						""",
+				Issuer.LABEL,
+				DELETED_NODE_LABEL_POSTFIX,
+				VERSIONED_NODE_LABEL_POSTFIX,
+				NType.LABEL,
+				NType.ISSUED_BY,
+				Issuer.LABEL,
+				deletedRelationshipType,
+				NType.ISSUED_BY);
+
+		final Map<String, Object> parameters = new HashMap<>();
+		parameters.put("issuerUuid", issuerUuid);
+		parameters.put("nids", nids);
+		parameters.put("createdBy", user != null ? user.getUuid() : "");
+		parameters.put("deletedBy", user != null ? user.getUuid() : "");
+
+		baseLogger.trace("Bulk linking {} nids to issuer uuid={}", nids.size(), issuerUuid);
+		baseLogger.trace("Query: {}", query);
+		baseLogger.trace("Parameters: {}", parameters);
+
+		return executeWriteCountMono(query, parameters, "linkedCount", baseLogger);
+	}
+
+	private static <T> List<List<T>> partition(List<T> items, int batchSize) {
+		final List<List<T>> batches = new ArrayList<>();
+		for (int index = 0; index < items.size(); index += batchSize) {
+			batches.add(items.subList(index, Math.min(index + batchSize, items.size())));
+		}
+		return batches;
 	}
 
 }

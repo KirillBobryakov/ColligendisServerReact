@@ -1,6 +1,8 @@
 package com.colligendis.server.database;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -14,8 +16,12 @@ import java.util.Map;
 
 import org.springframework.util.StringUtils;
 
+import com.colligendis.server.database.numista.model.NType.DemonetizedStatus;
+
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 @Data
 @Slf4j
@@ -48,14 +54,18 @@ public abstract class AbstractNode {
 	public Map<String, Object> getPropertiesMap() {
 		HashMap<String, Object> properties = new HashMap<>();
 
-		// Get all declared fields from this class
-		Field[] fields = this.getClass().getDeclaredFields();
+		Class<?> currentClass = this.getClass();
+		while (currentClass != null && currentClass != Object.class) {
+			appendDeclaredFieldProperties(currentClass.getDeclaredFields(), properties);
+			currentClass = currentClass.getSuperclass();
+		}
 
+		return properties;
+	}
+
+	private void appendDeclaredFieldProperties(Field[] fields, Map<String, Object> properties) {
 		for (Field field : fields) {
-			// Skip static and constant fields, and relationships
-			if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
-				continue;
-			} else if (field.getType().equals(Relationship.class)) {
+			if (shouldSkipPropertyField(field)) {
 				continue;
 			}
 
@@ -63,40 +73,38 @@ public abstract class AbstractNode {
 				field.setAccessible(true);
 				Object value = field.get(this);
 
-				// Add to map only if value is not null
 				if (value != null) {
-					// For Strings, also check if not empty
 					if (value instanceof String) {
 						if (StringUtils.hasText((String) value)) {
 							properties.put(field.getName(), value);
 						}
 					} else if (value instanceof Enum<?>) {
-						// Neo4j driver cannot convert Java enums - store as string
 						properties.put(field.getName(), ((Enum<?>) value).name());
 					} else {
 						properties.put(field.getName(), value);
 					}
 				}
 			} catch (IllegalAccessException e) {
-				// Skip fields that cannot be accessed
 				continue;
 			}
 		}
-
-		return properties;
 	}
 
 	public String getPropertiesQuery() {
 		StringBuilder query = new StringBuilder();
 
-		// Get all declared fields from this class
-		Field[] fields = this.getClass().getDeclaredFields();
+		Class<?> currentClass = this.getClass();
+		while (currentClass != null && currentClass != Object.class) {
+			appendDeclaredFieldQuery(currentClass.getDeclaredFields(), query);
+			currentClass = currentClass.getSuperclass();
+		}
 
+		return query.toString();
+	}
+
+	private void appendDeclaredFieldQuery(Field[] fields, StringBuilder query) {
 		for (Field field : fields) {
-			// Skip static and constant fields, and relationships
-			if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
-				continue;
-			} else if (field.getType().equals(Relationship.class)) {
+			if (shouldSkipPropertyField(field)) {
 				continue;
 			}
 
@@ -104,9 +112,7 @@ public abstract class AbstractNode {
 				field.setAccessible(true);
 				Object value = field.get(this);
 
-				// Add to query only if value is not null
 				if (value != null) {
-					// For Strings, also check if not empty
 					if (value instanceof String) {
 						if (StringUtils.hasText((String) value)) {
 							query.append(", ").append(field.getName()).append(": $").append(field.getName());
@@ -116,12 +122,9 @@ public abstract class AbstractNode {
 					}
 				}
 			} catch (IllegalAccessException e) {
-				// Skip fields that cannot be accessed
 				continue;
 			}
 		}
-
-		return query.toString();
 	}
 
 	public static <T extends AbstractNode> T fromPropertiesMap(Class<T> clazz, Map<String, Object> props) {
@@ -184,6 +187,8 @@ public abstract class AbstractNode {
 			return Boolean.parseBoolean(value.toString());
 		} else if (targetType == ZonedDateTime.class) {
 			return convertToZonedDateTime(value);
+		} else if (targetType == DemonetizedStatus.class) {
+			return DemonetizedStatus.fromCode(value.toString());
 		} else if (targetType.isEnum() && value != null) {
 			@SuppressWarnings({ "unchecked", "rawtypes" })
 			Object enumValue = Enum.valueOf((Class<Enum>) targetType, value.toString());
@@ -192,7 +197,7 @@ public abstract class AbstractNode {
 			return copyIntoCollection(targetType, (Iterable<?>) value);
 		} else if (value != null && !targetType.isAssignableFrom(value.getClass())) {
 			// Fallback: try to convert simple numeric types if possible
-			if (Number.class.isAssignableFrom(targetType) && value instanceof Number) {
+			if (isNumericType(targetType) && value instanceof Number) {
 				Number number = (Number) value;
 				if (targetType == Integer.class || targetType == int.class) {
 					return number.intValue();
@@ -211,6 +216,15 @@ public abstract class AbstractNode {
 		}
 
 		return value;
+	}
+
+	private static boolean isNumericType(Class<?> targetType) {
+		return targetType == Integer.class || targetType == int.class
+				|| targetType == Long.class || targetType == long.class
+				|| targetType == Double.class || targetType == double.class
+				|| targetType == Float.class || targetType == float.class
+				|| targetType == Short.class || targetType == short.class
+				|| targetType == Byte.class || targetType == byte.class;
 	}
 
 	private static ZonedDateTime convertToZonedDateTime(Object value) {
@@ -238,6 +252,47 @@ public abstract class AbstractNode {
 			collection.add(item);
 		}
 		return collection;
+	}
+
+	/**
+	 * Relationship targets and nested nodes are linked via Cypher, not stored as
+	 * node properties (Neo4j cannot serialize {@link AbstractNode} values).
+	 */
+	private static boolean shouldSkipPropertyField(Field field) {
+		if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+			return true;
+		}
+		if (java.lang.reflect.Modifier.isTransient(field.getModifiers())) {
+			return true;
+		}
+		Class<?> type = field.getType();
+		if (type.equals(Relationship.class)) {
+			return true;
+		}
+		if (AbstractNode.class.isAssignableFrom(type)) {
+			return true;
+		}
+		if (Mono.class.isAssignableFrom(type) || Flux.class.isAssignableFrom(type)) {
+			return true;
+		}
+		if (Collection.class.isAssignableFrom(type) && isCollectionOfNonPropertyElements(field)) {
+			return true;
+		}
+		return false;
+	}
+
+	private static boolean isCollectionOfNonPropertyElements(Field field) {
+		Type generic = field.getGenericType();
+		if (!(generic instanceof ParameterizedType parameterized)) {
+			return false;
+		}
+		Type[] args = parameterized.getActualTypeArguments();
+		if (args.length != 1 || !(args[0] instanceof Class<?> elementType)) {
+			return false;
+		}
+		return AbstractNode.class.isAssignableFrom(elementType)
+				|| Mono.class.isAssignableFrom(elementType)
+				|| Flux.class.isAssignableFrom(elementType);
 	}
 
 	private static Collection<Object> instantiateCollection(Class<?> targetType) {

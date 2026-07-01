@@ -5,9 +5,11 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -28,7 +30,6 @@ import com.colligendis.server.database.numista.model.Issuer;
 import com.colligendis.server.database.numista.model.IssuingEntity;
 import com.colligendis.server.database.numista.model.Mark;
 import com.colligendis.server.database.numista.model.Signature;
-import com.colligendis.server.database.numista.model.SpecifiedMint;
 import com.colligendis.server.database.numista.model.Variant;
 import com.colligendis.server.database.numista.service.CatalogueReferenceService;
 import com.colligendis.server.database.numista.service.CatalogueService;
@@ -36,10 +37,10 @@ import com.colligendis.server.database.numista.service.IssuingEntityService;
 import com.colligendis.server.database.numista.service.MarkService;
 import com.colligendis.server.database.numista.service.NTypeService;
 import com.colligendis.server.database.numista.service.SignatureService;
-import com.colligendis.server.database.numista.service.SpecifiedMintService;
 import com.colligendis.server.database.numista.service.VariantService;
 import com.colligendis.server.database.result.CreateNodeExecutionStatus;
 import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
+import com.colligendis.server.database.result.ExecutionResult;
 import com.colligendis.server.database.result.FindExecutionStatus;
 import com.colligendis.server.database.result.UpdateExecutionStatus;
 import com.colligendis.server.parser.PauseLock;
@@ -63,6 +64,8 @@ public class VariantsParser extends Parser {
 	private static final Pattern DIGITS = Pattern.compile("\\d+");
 	private static final Path SIGNATURE_PICTURES_STORAGE_ROOT = Path
 			.of("/Users/kirillbobryakov/Coins/Numista/storage/signatures");
+	private static final Path MARK_PICTURES_STORAGE_ROOT = Path
+			.of("/Users/kirillbobryakov/Coins/Numista/storage/marks");
 	private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
 
 	private static final String ISSUING_ENTITIES_URL_PREFIX = "https://en.numista.com/catalogue/get_issuing_entities.php?prefill=&country=";
@@ -70,7 +73,6 @@ public class VariantsParser extends Parser {
 
 	private final VariantService variantService;
 	private final NTypeService nTypeService;
-	private final SpecifiedMintService specifiedMintService;
 	private final MarkService markService;
 	private final CatalogueService catalogueService;
 	private final CatalogueReferenceService catalogueReferenceService;
@@ -198,7 +200,6 @@ public class VariantsParser extends Parser {
 					}
 				})
 				.flatMap(updated -> resolveAndLinkSignatures(updated, rowScope, numistaPage))
-				.flatMap(updated -> linkSpecifiedMint(updated, rowScope, numistaPage))
 				.flatMap(updated -> resolveAndLinkMarks(updated, rowScope, numistaPage))
 				.flatMap(updated -> resolveAndLinkCatalogueReferences(updated, rowScope, numistaPage));
 	}
@@ -240,7 +241,7 @@ public class VariantsParser extends Parser {
 		variant.setDateGregorianYear(parseIntFirst(root.select("input[name^=millesime]")));
 		variant.setDateMonth(parseIntFirst(root.select("input[name^=month]")));
 		variant.setDateDay(parseIntFirst(root.select("input[name^=day]")));
-		Element datesRow = root.selectFirst("tr[id^=dates]");
+		Element datesRow = root.parent().selectFirst("tr[id^=dates]");
 		if (datesRow != null) {
 			variant.setFromGregorianYear(parseIntFirst(datesRow.select("input[name^=dated]")));
 			variant.setTillGregorianYear(parseIntFirst(datesRow.select("input[name^=datef]")));
@@ -251,6 +252,8 @@ public class VariantsParser extends Parser {
 
 		String comment = firstInputValue(root, "input[name^=commentaire]");
 		variant.setComment(comment);
+
+		variant.setMintLetter(firstInputValue(root, "input[name^=atelier]"));
 
 		return variant;
 	}
@@ -346,15 +349,10 @@ public class VariantsParser extends Parser {
 			numistaPage.getPipelineStepLogger().warning("VariantsParser: skip PHP signature sync — no issuer");
 			return Mono.empty();
 		}
-		return PAUSE_LOCK.awaitIfPaused()
-				.then(Mono.defer(() -> {
-					if (!PAUSE_LOCK.pause()) {
-						return PAUSE_LOCK.awaitIfPaused().then(ensureSignaturesFromPhp(numistaPage));
-					}
-					return syncIssuingEntitiesAndSignatures(issuer, numistaPage)
-							.subscribeOn(Schedulers.boundedElastic())
-							.doFinally(signal -> PAUSE_LOCK.resume());
-				}));
+		return PAUSE_LOCK.runExclusiveOrElse(
+				() -> syncIssuingEntitiesAndSignatures(issuer, numistaPage)
+						.subscribeOn(Schedulers.boundedElastic()),
+				() -> ensureSignaturesFromPhp(numistaPage));
 	}
 
 	private Mono<Void> syncIssuingEntitiesAndSignatures(Issuer issuer, NumistaPage numistaPage) {
@@ -478,8 +476,9 @@ public class VariantsParser extends Parser {
 					s.setPictureUrl(NumistaCatalogueImageUrls.toStoredPicturePath(imageUrl));
 					return Mono.fromCallable(() -> resolveOrDownloadSignaturePicture(s, imageUrl, numistaPage))
 							.subscribeOn(Schedulers.boundedElastic())
-							.flatMap(signature -> signatureService.create(signature, numistaPage.getNumistaParserUserMono(),
-									numistaPage.getPipelineStepLogger())
+							.flatMap(signature -> signatureService
+									.create(signature, numistaPage.getNumistaParserUserMono(),
+											numistaPage.getPipelineStepLogger())
 									.flatMap(cr -> Mono.<Void>empty()));
 				});
 	}
@@ -494,7 +493,8 @@ public class VariantsParser extends Parser {
 						return Mono.just(updated);
 					}
 					return signatureService
-							.update(updated, numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger())
+							.update(updated, numistaPage.getNumistaParserUserMono(),
+									numistaPage.getPipelineStepLogger())
 							.flatMap(er -> {
 								if (er.getStatus().equals(UpdateExecutionStatus.WAS_UPDATED)
 										|| er.getStatus().equals(UpdateExecutionStatus.NOTHING_TO_UPDATE)) {
@@ -574,71 +574,23 @@ public class VariantsParser extends Parser {
 			return ".jpg";
 		}
 		String ext = path.substring(dot).toLowerCase();
-		if (ext.matches("\\.(jpg|jpeg|png|gif|webp)")) {
+		if (ext.matches("\\.(jpg|jpeg|png|gif|webp|svg)")) {
 			return ext;
 		}
 		return ".jpg";
 	}
 
-	private Mono<Variant> linkSpecifiedMint(Variant variant, Element scope, NumistaPage numistaPage) {
-		Element atelier = scope.selectFirst("input[name^=atelier]");
-		String rowId = atelier == null ? null
-				: StringUtils.trimToNull(NumistaParseUtils.getAttribute(atelier, "value"));
-		if (rowId == null) {
-			return Mono.just(variant);
-		}
-		return specifiedMintService.findByIdentifierLinkedToNType(rowId, numistaPage.nType.getUuid(),
-				numistaPage.getPipelineStepLogger())
-				.flatMap(er -> {
-					if (!er.getStatus().equals(FindExecutionStatus.FOUND)) {
-						numistaPage.getPipelineStepLogger().warning(
-								"VariantsParser: SpecifiedMint not found for identifier {} on nid {}", rowId,
-								numistaPage.nid);
-						return Mono.just(variant);
-					}
-					SpecifiedMint sm = er.getNode();
-					return variantService.setSpecifiedMint(variant, sm, numistaPage.getNumistaParserUserMono(),
-							numistaPage.getPipelineStepLogger())
-							.flatMap(link -> {
-								if (!link.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)
-										&& !link.getStatus()
-												.equals(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)) {
-									return Mono.error(new ParserException(
-											"Failed to link SpecifiedMint: " + link.getStatus()));
-								}
-								return Mono.just(variant);
-							});
-				});
-	}
-
 	private Mono<Variant> resolveAndLinkMarks(Variant variant, Element scope, NumistaPage numistaPage) {
-		return Flux.fromIterable(scope.select("td.date_mark span.mark_container img"))
-				.concatMap(img -> {
-					String src = NumistaParseUtils.getAttribute(img, "src");
-					String code = codeFromImageFilename(src);
-					if (StringUtils.isBlank(code)) {
-						return Mono.empty();
-					}
-					return markService.findByCode(code, numistaPage.getPipelineStepLogger())
-							.flatMap(er -> {
-								if (er.getStatus().equals(FindExecutionStatus.FOUND)) {
-									return Mono.just(er.getNode());
-								}
-								Mark m = new Mark();
-								m.setCode(code);
-								m.setName(NumistaParseUtils.getAttribute(img, "alt"));
-								m.setDescription(NumistaParseUtils.getAttribute(img, "title"));
-								m.setPicture(src);
-								return markService.create(m, numistaPage.getNumistaParserUserMono(),
-										numistaPage.getPipelineStepLogger())
-										.flatMap(cr -> {
-											if (cr.getStatus().equals(CreateNodeExecutionStatus.WAS_CREATED)) {
-												return Mono.just(cr.getNode());
-											}
-											return Mono.empty();
-										});
-							});
-				})
+		Element spanMarkContainer = scope.selectFirst("span.mark_container");
+
+		Element dateMarkTd = scope.selectFirst("td.date_mark");
+		List<ParsedMarkRow> rows = dateMarkTd == null ? List.of() : parseMarkRowsFromDateMark(dateMarkTd);
+		if (rows.isEmpty()) {
+			return variantService.setMarks(variant, List.of(), numistaPage.getNumistaParserUserMono(),
+					numistaPage.getPipelineStepLogger()).thenReturn(variant);
+		}
+		return Flux.fromIterable(rows)
+				.concatMap(row -> resolveOrCreateMark(row, numistaPage))
 				.collectList()
 				.flatMap(list -> variantService.setMarks(variant, list, numistaPage.getNumistaParserUserMono(),
 						numistaPage.getPipelineStepLogger())
@@ -650,6 +602,215 @@ public class VariantsParser extends Parser {
 							}
 							return Mono.just(variant);
 						}));
+	}
+
+	private static List<ParsedMarkRow> parseMarkRowsFromDateMark(Element dateMarkTd) {
+		Element select = dateMarkTd.selectFirst("select[name^=marks]");
+		List<String> nids = new ArrayList<>();
+		if (select != null) {
+			for (Element opt : select.select("option[selected]")) {
+				String val = StringUtils.trimToNull(opt.attr("value"));
+				if (val != null) {
+					nids.add(val);
+				}
+			}
+		}
+
+		List<ParsedMarkRow> rows = new ArrayList<>();
+		for (Element li : dateMarkTd.select("li.select2-selection__choice")) {
+			Element img = li.selectFirst("span.mark_container img.mark, img.mark");
+			if (img == null) {
+				continue;
+			}
+			String src = NumistaParseUtils.getAttribute(img, "src");
+			String code = codeFromImageFilename(src);
+			String name = NumistaParseUtils.getAttribute(img, "alt");
+			String description = NumistaParseUtils.getAttribute(img, "title");
+			String nid = !nids.isEmpty() && rows.size() < nids.size() ? nids.get(rows.size()) : null;
+			if (nid == null && select != null) {
+				nid = findMarkNidByImageCode(select, code);
+			}
+			rows.add(new ParsedMarkRow(nid, code, name, description, src));
+		}
+		for (int i = rows.size(); i < nids.size(); i++) {
+			rows.add(new ParsedMarkRow(nids.get(i), null, null, null, null));
+		}
+		return rows;
+	}
+
+	private static String findMarkNidByImageCode(Element select, String code) {
+		if (select == null || StringUtils.isBlank(code)) {
+			return null;
+		}
+		for (Element opt : select.select("option[value]")) {
+			String display = opt.attr("data-display");
+			if (StringUtils.isBlank(display)) {
+				continue;
+			}
+			try {
+				String decoded = new String(Base64.getDecoder().decode(display.strip()),
+						StandardCharsets.UTF_8);
+				if (decoded.contains(code)) {
+					return StringUtils.trimToNull(opt.attr("value"));
+				}
+			} catch (IllegalArgumentException ignored) {
+				// skip malformed data-display
+			}
+		}
+		return null;
+	}
+
+	private Mono<Mark> resolveOrCreateMark(ParsedMarkRow row, NumistaPage numistaPage) {
+		if (StringUtils.isBlank(row.nid()) && StringUtils.isBlank(row.code())) {
+			return Mono.empty();
+		}
+		Mono<ExecutionResult<Mark, FindExecutionStatus>> lookup = StringUtils.isNotBlank(row.nid())
+				? markService.findByNid(row.nid(), numistaPage.getPipelineStepLogger())
+				: markService.findByCode(row.code(), numistaPage.getPipelineStepLogger());
+		return lookup.flatMap(er -> {
+			Mono<Mark> markMono;
+			if (er.getStatus().equals(FindExecutionStatus.FOUND)) {
+				markMono = syncMarkFromRow(er.getNode(), row, numistaPage);
+			} else {
+				Mark mark = new Mark();
+				mark.setNid(row.nid());
+				mark.setCode(row.code());
+				mark.setName(row.name());
+				mark.setDescription(row.description());
+				mark.setPicture(row.picture());
+				markMono = markService.create(mark, numistaPage.getNumistaParserUserMono(),
+						numistaPage.getPipelineStepLogger())
+						.flatMap(cr -> {
+							if (cr.getStatus().equals(CreateNodeExecutionStatus.WAS_CREATED)) {
+								return Mono.just(cr.getNode());
+							}
+							return Mono.empty();
+						});
+			}
+			return markMono.flatMap(mark -> ensureMarkPictureLocal(mark, row.picture(), numistaPage));
+		});
+	}
+
+	private Mono<Mark> ensureMarkPictureLocal(Mark mark, String pictureUrl, NumistaPage numistaPage) {
+		String previousLocalPath = mark.getPictureLocalPath();
+		String previousPicture = mark.getPicture();
+		return Mono.fromCallable(() -> resolveOrDownloadMarkPicture(mark, pictureUrl, numistaPage))
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(updated -> {
+					if (Objects.equals(previousLocalPath, updated.getPictureLocalPath())
+							&& Objects.equals(
+									NumistaCatalogueImageUrls.toStoredPicturePath(previousPicture),
+									NumistaCatalogueImageUrls.toStoredPicturePath(updated.getPicture()))) {
+						return Mono.just(updated);
+					}
+					return markService
+							.update(updated, numistaPage.getNumistaParserUserMono(),
+									numistaPage.getPipelineStepLogger())
+							.flatMap(er -> {
+								if (er.getStatus().equals(UpdateExecutionStatus.WAS_UPDATED)
+										|| er.getStatus().equals(UpdateExecutionStatus.NOTHING_TO_UPDATE)) {
+									return Mono.just(er.getNode());
+								}
+								numistaPage.getPipelineStepLogger().warning(
+										"VariantsParser: failed to update Mark pictureLocalPath nid={}, status={}",
+										updated.getNid(), er.getStatus());
+								return Mono.just(updated);
+							});
+				});
+	}
+
+	private Mark resolveOrDownloadMarkPicture(Mark mark, String pictureUrl, NumistaPage numistaPage) {
+		String rawUrl = StringUtils.isNotBlank(pictureUrl) ? pictureUrl : mark.getPicture();
+		if (StringUtils.isBlank(rawUrl)) {
+			return mark;
+		}
+		String storedPath = NumistaCatalogueImageUrls.toStoredPicturePath(rawUrl);
+		String previousStoredPath = NumistaCatalogueImageUrls.toStoredPicturePath(mark.getPicture());
+		Path existingLocalPath = normalizeLocalPath(mark.getPictureLocalPath());
+		if (Objects.equals(storedPath, previousStoredPath) && existingLocalPath != null
+				&& Files.exists(existingLocalPath) && Files.isRegularFile(existingLocalPath)) {
+			return mark;
+		}
+		String absoluteUrl = NumistaCatalogueImageUrls.toAbsolutePictureUrl(storedPath);
+		if (StringUtils.isBlank(absoluteUrl)) {
+			return mark;
+		}
+		try {
+			Files.createDirectories(MARK_PICTURES_STORAGE_ROOT);
+			String fileKey = StringUtils.isNotBlank(mark.getNid()) ? mark.getNid() : mark.getCode();
+			if (StringUtils.isBlank(fileKey)) {
+				fileKey = codeFromImageFilename(rawUrl);
+			}
+			String fileName = "mark_" + fileKey + extensionFromUrl(absoluteUrl);
+			Path targetPath = MARK_PICTURES_STORAGE_ROOT.resolve(fileName).normalize();
+
+			HttpRequest request = HttpRequest.newBuilder(URI.create(absoluteUrl)).GET().build();
+			HttpResponse<byte[]> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofByteArray());
+			if (response.statusCode() >= 200 && response.statusCode() < 300 && response.body() != null
+					&& response.body().length > 0) {
+				Files.write(targetPath, response.body());
+				mark.setPicture(storedPath);
+				mark.setPictureLocalPath(targetPath.toString());
+				numistaPage.getPipelineStepLogger().debugGreen("Mark picture downloaded to: {}", targetPath);
+			} else {
+				numistaPage.getPipelineStepLogger().warning(
+						"VariantsParser: failed to download mark picture nid={}, status={}, url={}",
+						mark.getNid(), response.statusCode(), absoluteUrl);
+			}
+		} catch (IOException | InterruptedException | IllegalArgumentException exception) {
+			if (exception instanceof InterruptedException) {
+				Thread.currentThread().interrupt();
+			}
+			numistaPage.getPipelineStepLogger().warning(
+					"VariantsParser: failed to store mark picture locally nid={}, url={}",
+					mark.getNid(), absoluteUrl, exception);
+		}
+		return mark;
+	}
+
+	private Mono<Mark> syncMarkFromRow(Mark mark, ParsedMarkRow row, NumistaPage numistaPage) {
+		if (!applyRowToMark(mark, row)) {
+			return Mono.just(mark);
+		}
+		return markService.update(mark, numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger())
+				.flatMap(er -> {
+					if (er.getStatus().equals(UpdateExecutionStatus.WAS_UPDATED)
+							|| er.getStatus().equals(UpdateExecutionStatus.NOTHING_TO_UPDATE)) {
+						return Mono.just(er.getNode());
+					}
+					numistaPage.getPipelineStepLogger().warning(
+							"VariantsParser: failed to update Mark nid={}, status={}",
+							mark.getNid(), er.getStatus());
+					return Mono.just(mark);
+				});
+	}
+
+	private static boolean applyRowToMark(Mark mark, ParsedMarkRow row) {
+		boolean changed = false;
+		if (StringUtils.isNotBlank(row.nid()) && !Objects.equals(mark.getNid(), row.nid())) {
+			mark.setNid(row.nid());
+			changed = true;
+		}
+		if (StringUtils.isNotBlank(row.code()) && !Objects.equals(mark.getCode(), row.code())) {
+			mark.setCode(row.code());
+			changed = true;
+		}
+		if (StringUtils.isNotBlank(row.name()) && !Objects.equals(mark.getName(), row.name())) {
+			mark.setName(row.name());
+			changed = true;
+		}
+		if (StringUtils.isNotBlank(row.description()) && !Objects.equals(mark.getDescription(), row.description())) {
+			mark.setDescription(row.description());
+			changed = true;
+		}
+		if (StringUtils.isNotBlank(row.picture()) && !Objects.equals(mark.getPicture(), row.picture())) {
+			mark.setPicture(row.picture());
+			changed = true;
+		}
+		return changed;
+	}
+
+	private record ParsedMarkRow(String nid, String code, String name, String description, String picture) {
 	}
 
 	private static String codeFromImageFilename(String src) {

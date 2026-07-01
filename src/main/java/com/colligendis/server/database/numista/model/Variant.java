@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.colligendis.server.database.AbstractNode;
+import com.colligendis.server.util.UnicodeNormalizer;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -35,8 +36,7 @@ public class Variant extends AbstractNode {
 
 	private Integer mintage;
 
-	public static final String WITH_SPECIFIED_MINT = "WITH_SPECIFIED_MINT";
-	private SpecifiedMint specifiedMint;
+	private String mintLetter;
 
 	public static final String WITH_MARK = "WITH_MARK";
 	private List<Mark> marks = new ArrayList<>();
@@ -45,12 +45,18 @@ public class Variant extends AbstractNode {
 	private List<CatalogueReference> catalogueReferences = new ArrayList<>();
 
 	private String comment;
+	private String normalizedComment;
 
 	// Use this field for mark the variant as a stale
 	private Boolean deletedOnNumista;
 
 	public Variant(String nid) {
 		this.nid = nid;
+	}
+
+	public void setComment(String comment) {
+		this.comment = comment;
+		this.normalizedComment = UnicodeNormalizer.normalize(comment);
 	}
 
 }

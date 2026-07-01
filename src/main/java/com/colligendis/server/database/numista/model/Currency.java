@@ -2,8 +2,10 @@ package com.colligendis.server.database.numista.model;
 
 import java.time.Year;
 import java.util.ArrayList;
+import java.util.List;
 
 import com.colligendis.server.database.AbstractNode;
+import com.colligendis.server.util.UnicodeNormalizer;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -48,7 +50,9 @@ public class Currency extends AbstractNode {
 
 	private String nid;
 	private String fullName;
+	private String normalizedFullName;
 	private String name;
+	private String normalizedName;
 
 	/**
 	 * Kind of currency like as
@@ -62,10 +66,10 @@ public class Currency extends AbstractNode {
 	private Issuer issuer;
 
 	public static final String CIRCULATED_FROM = "CIRCULATED_FROM";
-	private ArrayList<Year> circulatedFromYears = new ArrayList<>();
+	private List<Year> circulatedFromYears = new ArrayList<>();
 
 	public static final String CIRCULATED_TILL = "CIRCULATED_TILL";
-	private ArrayList<Year> circulatedTillYears = new ArrayList<>();
+	private List<Year> circulatedTillYears = new ArrayList<>();
 
 	// todo: it might throw an error while parsing numista page
 	// @Relationship(type = Denomination.UNDER_CURRENCY, direction =
@@ -81,12 +85,25 @@ public class Currency extends AbstractNode {
 	public Currency(String nid, String fullName) {
 		this.nid = nid;
 		this.fullName = fullName;
+		this.normalizedFullName = UnicodeNormalizer.normalize(fullName);
 	}
 
 	public Currency(String nid, String fullName, String name) {
 		this.nid = nid;
 		this.fullName = fullName;
+		this.normalizedFullName = UnicodeNormalizer.normalize(fullName);
 		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
+	}
+
+	public void setFullName(String fullName) {
+		this.fullName = fullName;
+		this.normalizedFullName = UnicodeNormalizer.normalize(fullName);
+	}
+
+	public void setName(String name) {
+		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
 	}
 
 }

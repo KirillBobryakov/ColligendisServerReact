@@ -20,7 +20,7 @@ public class NumistaPipeline {
 	private final TitleParser titleParser;
 	private final CollectibleTypeParser collectibleTypeParser;
 	private final IssuerParser issuerParser;
-	private final RulerParser rulerParser;
+	private final RulingAuthorityParser rulingAuthorityParser;
 	private final IssuingEntityParser issuingEntityParser;
 	private final CurrencyParser currencyParser;
 	private final DenominationParser denominationParsing;
@@ -43,7 +43,7 @@ public class NumistaPipeline {
 				.flatMap(titleParser::parse)
 				.flatMap(collectibleTypeParser::parse)
 				.flatMap(issuerParser::parse)
-				.flatMap(rulerParser::parse)
+				.flatMap(rulingAuthorityParser::parse)
 				.flatMap(issuingEntityParser::parse)
 				.flatMap(currencyParser::parse)
 				.flatMap(denominationParsing::parse)

@@ -8,11 +8,12 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 
-import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import com.colligendis.server.database.AbstractNode;
+import com.colligendis.server.database.ColligendisUser;
 import com.colligendis.server.database.ColligendisUserService;
 import com.colligendis.server.database.numista.model.Country;
 import com.colligendis.server.database.numista.model.Issuer;
@@ -22,7 +23,8 @@ import com.colligendis.server.database.numista.service.IssuerService;
 import com.colligendis.server.database.numista.service.SubjectService;
 import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
 import com.colligendis.server.logger.BaseLogger;
-import com.colligendis.server.parser.numista.NumistaParseUtils;
+import com.colligendis.server.util.web.WebPageClient;
+import com.colligendis.server.util.web.WebPageLoadException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
@@ -39,6 +41,8 @@ public class IssuerTreeParser {
 	private final CountryService countryService;
 	private final SubjectService subjectService;
 	private final ColligendisUserService colligendisUserService;
+
+	private final WebPageClient webPageClient;
 
 	private final BaseLogger issuerTreeParserLogger = new BaseLogger();
 
@@ -259,7 +263,17 @@ public class IssuerTreeParser {
 		// ColligendisServerReact/numista/issuers
 		for (int page = 1; page <= 37; page++) {
 			String url = String.format("https://en.numista.com/catalogue/search_issuers.php?&p=%d&e=0", page);
-			String json = NumistaParseUtils.fetchJson(url, true);
+			String cookie = colligendisUserService.getNumistaParserUserMono()
+					.map(this::resolveCookie)
+					.defaultIfEmpty("")
+					.block();
+			String json;
+			try {
+				json = webPageClient.loadJson(url, cookie).block();
+			} catch (WebPageLoadException e) {
+				log.error("Failed to fetch JSON for page {}", page, e);
+				continue;
+			}
 			if (json == null) {
 				log.error("Failed to fetch JSON for page {}", page);
 				continue;
@@ -283,14 +297,22 @@ public class IssuerTreeParser {
 
 	private Document loadDocument() {
 		try {
-			return Jsoup.connect(ISSUERS_URL)
-					.userAgent(NumistaParseUtils.USER_AGENT)
-					.method(org.jsoup.Connection.Method.GET)
-					.get();
-		} catch (Exception e) {
+			String cookie = colligendisUserService.getNumistaParserUserMono()
+					.map(this::resolveCookie)
+					.defaultIfEmpty("")
+					.block();
+			return webPageClient.loadPageDocument(ISSUERS_URL, cookie).block();
+		} catch (WebPageLoadException e) {
 			log.error("Error loading issuers page: {}", ISSUERS_URL, e);
 			return null;
 		}
+	}
+
+	private String resolveCookie(ColligendisUser user) {
+		if (user != null && StringUtils.hasText(user.getNumistaCookie())) {
+			return user.getNumistaCookie().strip();
+		}
+		return "";
 	}
 
 }

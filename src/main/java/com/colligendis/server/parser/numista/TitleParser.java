@@ -34,7 +34,7 @@ public class TitleParser extends Parser {
 				nType.setTitle(title);
 				numistaPage.parsingStatus = ParsingStatus.CHANGED;
 			} else {
-				numistaPage.getPipelineStepLogger().info("Title: wasn't changed '{}'", title);
+				numistaPage.getPipelineStepLogger().infoGreen("Title: wasn't changed '{}'", title);
 			}
 
 			return Mono.just(numistaPage);

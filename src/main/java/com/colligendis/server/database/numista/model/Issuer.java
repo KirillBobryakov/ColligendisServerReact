@@ -4,9 +4,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.colligendis.server.database.AbstractNode;
+import com.colligendis.server.util.UnicodeNormalizer;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
 import lombok.ToString;
 
 /*
@@ -38,8 +40,9 @@ import lombok.ToString;
  */
 
 @Data
-@EqualsAndHashCode(callSuper = true)
+@EqualsAndHashCode(callSuper = true, exclude = { "parentSubject", "country" })
 @ToString(callSuper = true, onlyExplicitlyIncluded = true)
+@NoArgsConstructor
 public class Issuer extends AbstractNode {
 
 	public static final String LABEL = "ISSUER";
@@ -58,6 +61,10 @@ public class Issuer extends AbstractNode {
 	@ToString.Include
 	private String name;
 
+	private String normalizedName;
+
+	private int countNTypesOnNumista;
+
 	private List<String> ruAlternativeNames = new ArrayList<>();
 
 	public static final String RELATE_TO_SUBJECT = "RELATE_TO_SUBJECT";
@@ -65,5 +72,10 @@ public class Issuer extends AbstractNode {
 
 	public static final String RELATE_TO_COUNTRY = "RELATE_TO_COUNTRY";
 	private Country country;
+
+	public void setName(String name) {
+		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
+	}
 
 }

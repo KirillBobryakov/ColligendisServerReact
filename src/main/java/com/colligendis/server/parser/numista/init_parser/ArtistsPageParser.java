@@ -15,12 +15,15 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
+import com.colligendis.server.database.ColligendisUser;
 import com.colligendis.server.database.ColligendisUserService;
 import com.colligendis.server.database.numista.model.Artist;
 import com.colligendis.server.database.numista.service.ArtistService;
 import com.colligendis.server.logger.BaseLogger;
-import com.colligendis.server.parser.numista.NumistaParseUtils;
+import com.colligendis.server.util.web.WebPageClient;
+import com.colligendis.server.util.web.WebPageLoadException;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,6 +43,7 @@ public class ArtistsPageParser {
 
 	private final ArtistService artistService;
 	private final ColligendisUserService colligendisUserService;
+	private final WebPageClient webPageClient;
 
 	private final BaseLogger artistsPageParserLogger = new BaseLogger();
 
@@ -61,7 +65,7 @@ public class ArtistsPageParser {
 			Set<String> visitedListUrls = new HashSet<>();
 			boolean firstPage = true;
 			while (nextUrl != null && visitedListUrls.add(nextUrl)) {
-				Document document = NumistaParseUtils.loadPageByURL(nextUrl);
+				Document document = loadPage(nextUrl);
 				if (document == null) {
 					System.err.printf("Failed to load artists list: %s%n", nextUrl);
 					break;
@@ -98,6 +102,26 @@ public class ArtistsPageParser {
 				.doOnComplete(() -> System.out.println("All artists have been saved."))
 				.doOnError(error -> System.err.println("Fatal error processing artists: " + error.getMessage()))
 				.subscribe();
+	}
+
+	private Document loadPage(String url) {
+		try {
+			String cookie = colligendisUserService.getNumistaParserUserMono()
+					.map(this::resolveCookie)
+					.defaultIfEmpty("")
+					.block();
+			return webPageClient.loadPageDocument(url, cookie).block();
+		} catch (WebPageLoadException e) {
+			log.error("Error loading page: {}", url, e);
+			return null;
+		}
+	}
+
+	private String resolveCookie(ColligendisUser user) {
+		if (user != null && StringUtils.hasText(user.getNumistaCookie())) {
+			return user.getNumistaCookie().strip();
+		}
+		return "";
 	}
 
 	private static void extractArtists(Document document, List<Artist> out, Set<String> seenNids) {

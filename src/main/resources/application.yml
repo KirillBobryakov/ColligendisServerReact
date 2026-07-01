@@ -53,6 +53,13 @@ colligendis:
       challenge-wait-ms: 180000
       # When true, keep polling until the challenge page is gone (no timeout).
       challenge-wait-forever: true
+    selenium:
+      headless: true
+      # Per-phase wait while Cloudflare clears (ms). Override: -Dnumista.selenium.challenge-wait-ms=...
+      challenge-wait-ms: 180000
+      challenge-wait-forever: true
+      navigate-timeout-ms: 60000
+      profile-dir: ${user.home}/.colligendis/selenium-numista-profile
 
 logging:
   level:

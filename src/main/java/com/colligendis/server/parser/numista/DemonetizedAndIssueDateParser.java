@@ -3,6 +3,8 @@ package com.colligendis.server.parser.numista;
 import org.jsoup.nodes.Element;
 import org.springframework.stereotype.Component;
 
+import com.colligendis.server.database.numista.model.NType.DemonetizedStatus;
+
 import reactor.core.publisher.Mono;
 
 @Component
@@ -48,7 +50,7 @@ public class DemonetizedAndIssueDateParser extends Parser {
 				demonetizationDay = NumistaParseUtils.getAttribute(numistaPage.page.selectFirst("#jd"), "value");
 			}
 
-			numistaPage.nType.setDemonetized(demonetized);
+			numistaPage.nType.setDemonetized(DemonetizedStatus.fromCode(demonetized));
 			numistaPage.nType.setDemonetizationYear(demonetizationYear);
 			numistaPage.nType.setDemonetizationMonth(demonetizationMonth);
 			numistaPage.nType.setDemonetizationDay(demonetizationDay);

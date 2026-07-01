@@ -8,7 +8,6 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.util.ArrayList;
 import java.util.List;
 
 @Component
@@ -19,34 +18,21 @@ public class NumistaPageParser {
 	private final NumistaPipeline numistaPipeline;
 
 	public void parseAll(Flux<String> nids) {
-		List<String> errorNids = new ArrayList<>();
+		List<String> errorNids = nids
+				.flatMap(nid -> runPipeline(nid).subscribeOn(Schedulers.boundedElastic()), 2)
+				.filter(result -> result.status == ParseResult.Status.FAILED)
+				.map(ParseResult::nid)
+				.collectList()
+				.block();
 
-		nids.flatMap(nid -> runPipeline(nid).subscribeOn(Schedulers.boundedElastic()), 2)
-				.doOnNext(result -> {
-					if (result.status == ParseResult.Status.FAILED) {
-						errorNids.add(result.nid);
-					}
-				})
-				.blockLast();
-
-		if (!errorNids.isEmpty()) {
-			log.error("Error parsing Numista Pages with nids: {}", errorNids);
-			for (String errorNid : errorNids) {
-				log.error("Error parsing Numista Page with nid: {}", errorNid);
-			}
+		if (errorNids == null || errorNids.isEmpty()) {
+			return;
+		}
+		log.error("Error parsing Numista Pages with nids: {}", errorNids);
+		for (String errorNid : errorNids) {
+			log.error("Error parsing Numista Page with nid: {}", errorNid);
 		}
 	}
-
-	// public static Mono<NumistaPage> pipeline(String nid) {
-	// return NumistaPage.create(nid)
-	// .flatMap(PageLoader.getInstance()::parse)
-	// .flatMap(NumistaPage::loadNType)
-	// .flatMap(TitleParser.getInstance()::parse)
-	// .flatMap(CollectibleTypeParser.getInstance()::parse)
-	// .flatMap(IssuerParser.getInstance()::parse)
-	// .flatMap(RulerParser.instance.parse)
-	// .flatMap(NumistaPage::saveNType);
-	// }
 
 	public record ParseResult(String nid, Status status, Throwable error) {
 		public enum Status {

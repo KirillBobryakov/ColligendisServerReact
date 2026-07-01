@@ -1,15 +1,15 @@
 package com.colligendis.server.util.web;
 
 import java.nio.charset.StandardCharsets;
+import java.util.function.Consumer;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.springframework.beans.factory.annotation.Value;
-import java.util.function.Consumer;
-
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
@@ -20,6 +20,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Mono;
+import reactor.netty.http.client.HttpClient;
 
 /**
  * Reactive HTTP GET client backed by {@link WebClient}.
@@ -52,6 +53,7 @@ public class WebPageClient {
 		this.requireCookieWhenEnabled = requireCookieWhenEnabled;
 		this.defaultAcceptHeader = WebPageAccept.resolve(acceptConfig).headerValue();
 		this.client = WebClient.builder()
+				.clientConnector(new ReactorClientHttpConnector(HttpClient.create().followRedirect(true)))
 				.exchangeStrategies(ExchangeStrategies.builder()
 						.codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(maxInMemorySize))
 						.build())

@@ -69,7 +69,8 @@ public class NumistaParseUtils {
 	private boolean challengeWaitForever;
 
 	/**
-	 * Cookie header for Numista (from {@code colligendis.numista.cookie}). Filled in
+	 * Cookie header for Numista (from {@code colligendis.numista.cookie}). Filled
+	 * in
 	 * {@link #applyNumistaCookieFromConfig()} for static helpers.
 	 */
 	private static volatile String configuredNumistaCookie = "";
@@ -105,7 +106,9 @@ public class NumistaParseUtils {
 		return fromConfig > 0 ? fromConfig : 180_000L;
 	}
 
-	public static final String USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15";
+	// public static final String USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS
+	// X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3
+	// Safari/605.1.15";
 
 	private static final double NAVIGATE_TIMEOUT_MS = Double.parseDouble(
 			System.getProperty("numista.playwright.navigate-timeout-ms", "60000"));
@@ -117,98 +120,103 @@ public class NumistaParseUtils {
 	private static final String BOT_CHALLENGE_MARKER = "Enable JavaScript and cookies to continue";
 	private static final String NUMISTA_HOME_URL = "https://en.numista.com/";
 
-	@LogExecutionTime
-	public static Document loadPageByURL(String urlString) {
-		try {
-			Files.createDirectories(PLAYWRIGHT_PROFILE_DIR);
-		} catch (IOException e) {
-			throw new IllegalStateException("Failed to init Playwright profile directory", e);
-		}
+	// @LogExecutionTime
+	// public static Document loadPageByURL(String urlString) {
+	// return loadPageByURL(urlString, null);
+	// }
 
-		String cookieHeader = resolveCookieHeader();
-		if (configuredUseCookies && cookieHeader.isEmpty()) {
-			log.warn(
-					"Numista cookie is empty (set NUMISTA_COOKIE or colligendis.numista.cookie). "
-							+ "Cloudflare will likely block headless requests.");
-		}
+	// /**
+	// * @param cookieHeaderOverride when non-blank, used instead of configured /
+	// * fallback cookie
+	// */
+	// @LogExecutionTime
+	// public static Document loadPageByURL(String urlString, String
+	// cookieHeaderOverride) {
+	// try {
+	// Files.createDirectories(PLAYWRIGHT_PROFILE_DIR);
+	// } catch (IOException e) {
+	// throw new IllegalStateException("Failed to init Playwright profile
+	// directory", e);
+	// }
 
-		Page page = null;
-		try {
-			BrowserContext context = NumistaPlaywrightSession.getContext();
-			NumistaPlaywrightSession.applyCookies(context, cookieHeader, urlString);
-			page = context.newPage();
+	// if (configuredUseCookies && configuredNumistaCookie.isEmpty()) {
+	// log.warn(
+	// "Numista cookie is empty (set NUMISTA_COOKIE or colligendis.numista.cookie).
+	// "
+	// + "Cloudflare will likely block headless requests.");
+	// }
 
-			Response response = navigate(page, urlString);
-			if (response != null && response.status() == 404) {
-				return null;
-			}
+	// Page page = null;
+	// try {
+	// BrowserContext context = NumistaPlaywrightSession.getContext();
+	// NumistaPlaywrightSession.applyCookies(context, cookieHeaderOverride,
+	// urlString);
+	// page = context.newPage();
 
-			waitPastBotChallenge(page, urlString);
+	// Response response = navigate(page, urlString);
+	// if (response != null && response.status() == 404) {
+	// return null;
+	// }
 
-			if (isBotChallengeHtml(page.content())) {
-				log.info("Bot challenge on {}, warming session via {}", urlString, NUMISTA_HOME_URL);
-				navigate(page, NUMISTA_HOME_URL);
-				waitPastBotChallenge(page, NUMISTA_HOME_URL);
-				NumistaPlaywrightSession.markWarmedUp();
+	// waitPastBotChallenge(page, urlString);
 
-				response = navigate(page, urlString);
-				if (response != null && response.status() == 404) {
-					return null;
-				}
-				waitPastBotChallenge(page, urlString);
-			}
+	// if (isBotChallengeHtml(page.content())) {
+	// log.info("Bot challenge on {}, warming session via {}", urlString,
+	// NUMISTA_HOME_URL);
+	// navigate(page, NUMISTA_HOME_URL);
+	// waitPastBotChallenge(page, NUMISTA_HOME_URL);
+	// NumistaPlaywrightSession.markWarmedUp();
 
-			String html = page.content();
-			if (isBotChallengeHtml(html)) {
-				long extendedWaitMs = configuredChallengeWaitForever
-						? Long.MAX_VALUE
-						: configuredChallengeWaitMs * 3;
-				if (!PLAYWRIGHT_HEADLESS) {
-					log.warn(
-							"Solve Cloudflare in the visible browser window if prompted, then wait{}...",
-							configuredChallengeWaitForever ? " (no timeout)" : " (up to " + extendedWaitMs / 1000 + " s)");
-				} else {
-					log.warn(
-							"Cloudflare challenge still present; waiting{} for auto-clearance (cf_clearance cookie)...",
-							configuredChallengeWaitForever ? " indefinitely" : " up to " + extendedWaitMs / 1000 + " s");
-				}
-				waitPastBotChallenge(page, urlString, extendedWaitMs);
-				html = page.content();
-			}
+	// response = navigate(page, urlString);
+	// if (response != null && response.status() == 404) {
+	// return null;
+	// }
+	// waitPastBotChallenge(page, urlString);
+	// }
 
-			if (isBotChallengeHtml(html)) {
-				log.error(
-						"Numista bot challenge still present for {}. Set a fresh Cookie header "
-								+ "(cf_clearance, PHPSESSID) in NUMISTA_COOKIE, or run once with "
-								+ "-Dnumista.playwright.headless=false and open {} in the launched browser.",
-						urlString, NUMISTA_HOME_URL);
-				return null;
-			}
-			return Jsoup.parse(html, urlString);
-		} catch (PlaywrightException e) {
-			log.error("Error loading page by URL: {}", urlString, e);
-			return null;
-		} finally {
-			if (page != null) {
-				try {
-					page.close();
-				} catch (PlaywrightException ignored) {
-					// page may already be closed if context was reset
-				}
-			}
-		}
-	}
+	// String html = page.content();
+	// if (isBotChallengeHtml(html)) {
+	// long extendedWaitMs = configuredChallengeWaitForever
+	// ? Long.MAX_VALUE
+	// : configuredChallengeWaitMs * 3;
+	// if (!PLAYWRIGHT_HEADLESS) {
+	// log.warn(
+	// "Solve Cloudflare in the visible browser window if prompted, then wait{}...",
+	// configuredChallengeWaitForever ? " (no timeout)"
+	// : " (up to " + extendedWaitMs / 1000 + " s)");
+	// } else {
+	// log.warn(
+	// "Cloudflare challenge still present; waiting{} for auto-clearance
+	// (cf_clearance cookie)...",
+	// configuredChallengeWaitForever ? " indefinitely"
+	// : " up to " + extendedWaitMs / 1000 + " s");
+	// }
+	// waitPastBotChallenge(page, urlString, extendedWaitMs);
+	// html = page.content();
+	// }
 
-	private static String resolveCookieHeader() {
-		if (!configuredUseCookies) {
-			return "";
-		}
-		if (!configuredNumistaCookie.isEmpty()) {
-			return configuredNumistaCookie;
-		}
-		String fallback = PageLoader.COOKIE;
-		return fallback == null ? "" : fallback.strip();
-	}
+	// if (isBotChallengeHtml(html)) {
+	// log.error(
+	// "Numista bot challenge still present for {}. Set a fresh Cookie header "
+	// + "(cf_clearance, PHPSESSID) in NUMISTA_COOKIE, or run once with "
+	// + "-Dnumista.playwright.headless=false and open {} in the launched browser.",
+	// urlString, NUMISTA_HOME_URL);
+	// return null;
+	// }
+	// return Jsoup.parse(html, urlString);
+	// } catch (PlaywrightException e) {
+	// log.error("Error loading page by URL: {}", urlString, e);
+	// return null;
+	// } finally {
+	// if (page != null) {
+	// try {
+	// page.close();
+	// } catch (PlaywrightException ignored) {
+	// // page may already be closed if context was reset
+	// }
+	// }
+	// }
+	// }
 
 	private static Response navigate(Page page, String urlString) {
 		try {
@@ -242,7 +250,8 @@ public class NumistaParseUtils {
 	}
 
 	/**
-	 * Polls until the challenge page is replaced or the configured wait budget elapses.
+	 * Polls until the challenge page is replaced or the configured wait budget
+	 * elapses.
 	 */
 	private static void waitPastBotChallenge(Page page, String urlString) {
 		waitPastBotChallenge(page, urlString, effectiveChallengeWaitMs());
@@ -293,180 +302,193 @@ public class NumistaParseUtils {
 		}
 	}
 
-	private static List<Cookie> toPlaywrightCookies(String rawCookieHeader, String urlString) {
-		if (rawCookieHeader == null || rawCookieHeader.isBlank()) {
-			return List.of();
-		}
-		String cookieDomain = cookieDomainForUrl(urlString);
-		if (cookieDomain == null) {
-			return List.of();
-		}
+	// private static List<Cookie> toPlaywrightCookies(String rawCookieHeader,
+	// String urlString) {
+	// if (rawCookieHeader == null || rawCookieHeader.isBlank()) {
+	// return List.of();
+	// }
+	// String cookieDomain = cookieDomainForUrl(urlString);
+	// if (cookieDomain == null) {
+	// return List.of();
+	// }
 
-		List<Cookie> cookies = new ArrayList<>();
-		Arrays.stream(rawCookieHeader.split(";"))
-				.map(String::trim)
-				.filter(part -> !part.isEmpty() && part.contains("="))
-				.forEach(part -> {
-					String[] kv = part.split("=", 2);
-					String name = kv[0].trim();
-					String value = kv.length > 1 ? kv[1] : "";
-					if (name.isEmpty()) {
-						return;
-					}
-					Cookie cookie = new Cookie(name, value)
-							.setDomain(cookieDomain)
-							.setPath("/");
-					cookies.add(cookie);
-				});
-		return cookies;
-	}
+	// List<Cookie> cookies = new ArrayList<>();
+	// Arrays.stream(rawCookieHeader.split(";"))
+	// .map(String::trim)
+	// .filter(part -> !part.isEmpty() && part.contains("="))
+	// .forEach(part -> {
+	// String[] kv = part.split("=", 2);
+	// String name = kv[0].trim();
+	// String value = kv.length > 1 ? kv[1] : "";
+	// if (name.isEmpty()) {
+	// return;
+	// }
+	// Cookie cookie = new Cookie(name, value)
+	// .setDomain(cookieDomain)
+	// .setPath("/");
+	// cookies.add(cookie);
+	// });
+	// return cookies;
+	// }
 
-	/** {@code .numista.com} so cookies apply to {@code en.numista.com} and subdomains. */
-	private static String cookieDomainForUrl(String urlString) {
-		try {
-			String host = URI.create(urlString).getHost();
-			if (host == null || host.isBlank()) {
-				return null;
-			}
-			if (host.endsWith("numista.com")) {
-				return ".numista.com";
-			}
-			return host.startsWith(".") ? host : "." + host;
-		} catch (RuntimeException e) {
-			return null;
-		}
-	}
+	// /**
+	// * {@code .numista.com} so cookies apply to {@code en.numista.com} and
+	// * subdomains.
+	// */
+	// private static String cookieDomainForUrl(String urlString) {
+	// try {
+	// String host = URI.create(urlString).getHost();
+	// if (host == null || host.isBlank()) {
+	// return null;
+	// }
+	// if (host.endsWith("numista.com")) {
+	// return ".numista.com";
+	// }
+	// return host.startsWith(".") ? host : "." + host;
+	// } catch (RuntimeException e) {
+	// return null;
+	// }
+	// }
 
-	/**
-	 * Reuses one persistent Chromium profile so {@code cf_clearance} survives across requests.
-	 */
-	private static final class NumistaPlaywrightSession {
+	// /**
+	// * Reuses one persistent Chromium profile so {@code cf_clearance} survives
+	// * across requests.
+	// */
+	// private static final class NumistaPlaywrightSession {
 
-		private static final Object LOCK = new Object();
-		private static final AtomicLong LAST_WARMUP_MS = new AtomicLong(0);
-		private static final long WARMUP_INTERVAL_MS = 30 * 60 * 1000L;
+	// private static final Object LOCK = new Object();
+	// private static final AtomicLong LAST_WARMUP_MS = new AtomicLong(0);
+	// private static final long WARMUP_INTERVAL_MS = 30 * 60 * 1000L;
 
-		private static Playwright playwright;
-		private static BrowserContext context;
-		private static String appliedCookieHeader = "";
+	// private static Playwright playwright;
+	// private static BrowserContext context;
+	// private static String appliedCookieHeader = "";
 
-		static {
-			Runtime.getRuntime().addShutdownHook(new Thread(NumistaPlaywrightSession::close, "numista-playwright-shutdown"));
-		}
+	// static {
+	// Runtime.getRuntime()
+	// .addShutdownHook(new Thread(NumistaPlaywrightSession::close,
+	// "numista-playwright-shutdown"));
+	// }
 
-		static BrowserContext getContext() {
-			synchronized (LOCK) {
-				if (isContextAlive(context)) {
-					return context;
-				}
-				if (context != null) {
-					close();
-				}
-				initContext();
-				return context;
-			}
-		}
+	// static BrowserContext getContext() {
+	// synchronized (LOCK) {
+	// if (isContextAlive(context)) {
+	// return context;
+	// }
+	// if (context != null) {
+	// close();
+	// }
+	// initContext();
+	// return context;
+	// }
+	// }
 
-		/**
-		 * {@link BrowserContext#browser()} is null for {@code launchPersistentContext}; probe lightly instead.
-		 */
-		private static boolean isContextAlive(BrowserContext ctx) {
-			if (ctx == null) {
-				return false;
-			}
-			try {
-				Browser browser = ctx.browser();
-				if (browser != null) {
-					return browser.isConnected();
-				}
-				ctx.pages();
-				return true;
-			} catch (PlaywrightException | NullPointerException e) {
-				return false;
-			}
-		}
+	// /**
+	// * {@link BrowserContext#browser()} is null for {@code
+	// launchPersistentContext};
+	// * probe lightly instead.
+	// */
+	// private static boolean isContextAlive(BrowserContext ctx) {
+	// if (ctx == null) {
+	// return false;
+	// }
+	// try {
+	// Browser browser = ctx.browser();
+	// if (browser != null) {
+	// return browser.isConnected();
+	// }
+	// ctx.pages();
+	// return true;
+	// } catch (PlaywrightException | NullPointerException e) {
+	// return false;
+	// }
+	// }
 
-		static void applyCookies(BrowserContext ctx, String cookieHeader, String urlString) {
-			if (cookieHeader == null || cookieHeader.isBlank()) {
-				return;
-			}
-			synchronized (LOCK) {
-				if (cookieHeader.equals(appliedCookieHeader)) {
-					return;
-				}
-				List<Cookie> cookies = toPlaywrightCookies(cookieHeader, urlString);
-				if (!cookies.isEmpty()) {
-					ctx.addCookies(cookies);
-					appliedCookieHeader = cookieHeader;
-				}
-			}
-		}
+	// static void applyCookies(BrowserContext ctx, String cookieHeader, String
+	// urlString) {
+	// if (cookieHeader == null || cookieHeader.isBlank()) {
+	// return;
+	// }
+	// synchronized (LOCK) {
+	// if (cookieHeader.equals(appliedCookieHeader)) {
+	// return;
+	// }
+	// List<Cookie> cookies = toPlaywrightCookies(cookieHeader, urlString);
+	// if (!cookies.isEmpty()) {
+	// ctx.addCookies(cookies);
+	// appliedCookieHeader = cookieHeader;
+	// }
+	// }
+	// }
 
-		static void markWarmedUp() {
-			LAST_WARMUP_MS.set(System.currentTimeMillis());
-		}
+	// static void markWarmedUp() {
+	// LAST_WARMUP_MS.set(System.currentTimeMillis());
+	// }
 
-		private static void initContext() {
-			close();
-			try {
-				Files.createDirectories(PLAYWRIGHT_PROFILE_DIR);
-			} catch (IOException e) {
-				throw new IllegalStateException("Failed to init Playwright profile directory", e);
-			}
+	// private static void initContext() {
+	// close();
+	// try {
+	// Files.createDirectories(PLAYWRIGHT_PROFILE_DIR);
+	// } catch (IOException e) {
+	// throw new IllegalStateException("Failed to init Playwright profile
+	// directory", e);
+	// }
 
-			playwright = Playwright.create();
-			context = playwright.chromium().launchPersistentContext(
-					PLAYWRIGHT_PROFILE_DIR,
-					new BrowserType.LaunchPersistentContextOptions()
-							.setHeadless(PLAYWRIGHT_HEADLESS)
-							.setJavaScriptEnabled(true)
-							.setUserAgent(
-									"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15")
-							.setArgs(List.of(
-									"--disable-blink-features=AutomationControlled")));
+	// playwright = Playwright.create();
+	// context = playwright.chromium().launchPersistentContext(
+	// PLAYWRIGHT_PROFILE_DIR,
+	// new BrowserType.LaunchPersistentContextOptions()
+	// .setHeadless(PLAYWRIGHT_HEADLESS)
+	// .setJavaScriptEnabled(true)
+	// .setUserAgent(
+	// "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML,
+	// like Gecko) Version/26.4 Safari/605.1.15")
+	// .setArgs(List.of(
+	// "--disable-blink-features=AutomationControlled")));
 
-			Map<String, String> headers = new HashMap<>();
-			headers.put("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-			headers.put("Accept-Language", "en-GB,en;q=0.9");
-			context.setExtraHTTPHeaders(headers);
-			appliedCookieHeader = "";
+	// Map<String, String> headers = new HashMap<>();
+	// headers.put("Accept",
+	// "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+	// headers.put("Accept-Language", "en-GB,en;q=0.9");
+	// context.setExtraHTTPHeaders(headers);
+	// appliedCookieHeader = "";
 
-			long sinceWarmup = System.currentTimeMillis() - LAST_WARMUP_MS.get();
-			if (sinceWarmup > WARMUP_INTERVAL_MS) {
-				Page warmup = context.newPage();
-				try {
-					navigate(warmup, NUMISTA_HOME_URL);
-					waitPastBotChallenge(warmup, NUMISTA_HOME_URL);
-					markWarmedUp();
-				} finally {
-					warmup.close();
-				}
-			}
+	// long sinceWarmup = System.currentTimeMillis() - LAST_WARMUP_MS.get();
+	// if (sinceWarmup > WARMUP_INTERVAL_MS) {
+	// Page warmup = context.newPage();
+	// try {
+	// navigate(warmup, NUMISTA_HOME_URL);
+	// waitPastBotChallenge(warmup, NUMISTA_HOME_URL);
+	// markWarmedUp();
+	// } finally {
+	// warmup.close();
+	// }
+	// }
 
-			log.info("Numista Playwright session started (headless={}, profile={})",
-					PLAYWRIGHT_HEADLESS, PLAYWRIGHT_PROFILE_DIR);
-		}
+	// log.info("Numista Playwright session started (headless={}, profile={})",
+	// PLAYWRIGHT_HEADLESS, PLAYWRIGHT_PROFILE_DIR);
+	// }
 
-		private static void close() {
-			synchronized (LOCK) {
-				if (context != null) {
-					try {
-						context.close();
-					} catch (PlaywrightException ignored) {
-					}
-					context = null;
-				}
-				if (playwright != null) {
-					try {
-						playwright.close();
-					} catch (PlaywrightException ignored) {
-					}
-					playwright = null;
-				}
-				appliedCookieHeader = "";
-			}
-		}
-	}
+	// private static void close() {
+	// synchronized (LOCK) {
+	// if (context != null) {
+	// try {
+	// context.close();
+	// } catch (PlaywrightException ignored) {
+	// }
+	// context = null;
+	// }
+	// if (playwright != null) {
+	// try {
+	// playwright.close();
+	// } catch (PlaywrightException ignored) {
+	// }
+	// playwright = null;
+	// }
+	// appliedCookieHeader = "";
+	// }
+	// }
+	// }
 
 	public static String getAttribute(Element element, String key) {
 		if (element != null && !element.attributes().get(key).isEmpty()) {
@@ -484,10 +506,13 @@ public class NumistaParseUtils {
 			return null;
 		}
 
-		Element option = element.selectFirst("option");
+		Element option = element.select("option").stream()
+				.filter(o -> o.hasAttr("selected"))
+				.findFirst()
+				.orElse(null);
 
 		if (option == null) {
-			numistaPage.getPipelineStepLogger().trace("Can't find <option> tag in " + searchQuery + " on the page");
+			numistaPage.getPipelineStepLogger().trace("Can't find selected <option> in " + searchQuery + " on the page");
 			return null;
 		}
 
@@ -585,116 +610,137 @@ public class NumistaParseUtils {
 		return null;
 	}
 
-	/**
-	 * Fetches content from the given URL and parses it as a JSON object.
-	 *
-	 * @param urlString  The URL to fetch JSON data from.
-	 * @param useCookies Whether to include the configured Numista cookie and USER_AGENT
-	 *                   (useful for numista.com APIs).
-	 * @return A JsonObject if parsing is successful, otherwise null.
-	 */
-	public static <T> T fetchAndParseJson(String urlString, boolean useCookies, Class<T> clazz) {
-		try {
-			URL url = URI.create(urlString).toURL();
-			HttpURLConnection con = (HttpURLConnection) url.openConnection();
+	// /**
+	// * Fetches content from the given URL and parses it as a JSON object.
+	// *
+	// * @param urlString The URL to fetch JSON data from.
+	// * @param useCookies Whether to include the configured Numista cookie and
+	// * USER_AGENT
+	// * (useful for numista.com APIs).
+	// * @return A JsonObject if parsing is successful, otherwise null.
+	// */
+	// public static <T> T fetchAndParseJson(String urlString, boolean useCookies,
+	// Class<T> clazz) {
+	// try {
+	// URL url = URI.create(urlString).toURL();
+	// HttpURLConnection con = (HttpURLConnection) url.openConnection();
 
-			con.setRequestMethod("GET");
-			con.setRequestProperty("Accept", "application/json"); // Indicate we expect JSON
+	// con.setRequestMethod("GET");
+	// con.setRequestProperty("Accept", "application/json"); // Indicate we expect
+	// JSON
 
-			if (useCookies && configuredUseCookies && !configuredNumistaCookie.isEmpty()) {
-				con.setRequestProperty("User-Agent", USER_AGENT);
-				con.setRequestProperty("Cookie", configuredNumistaCookie); // Use with caution if the JSON source is not numista
-			}
+	// if (useCookies && configuredUseCookies && !configuredNumistaCookie.isEmpty())
+	// {
+	// con.setRequestProperty("User-Agent", USER_AGENT);
+	// con.setRequestProperty("Cookie", configuredNumistaCookie); // Use with
+	// caution if the JSON source is not
+	// // numista
+	// }
 
-			int responseCode = con.getResponseCode();
-			if (responseCode >= 200 && responseCode < 300) { // Check for successful response
-				BufferedReader in = new BufferedReader(new InputStreamReader(con.getInputStream()));
-				String inputLine;
-				StringBuilder responseContent = new StringBuilder();
-				while ((inputLine = in.readLine()) != null) {
-					responseContent.append(inputLine);
-				}
-				in.close();
+	// int responseCode = con.getResponseCode();
+	// if (responseCode >= 200 && responseCode < 300) { // Check for successful
+	// response
+	// BufferedReader in = new BufferedReader(new
+	// InputStreamReader(con.getInputStream()));
+	// String inputLine;
+	// StringBuilder responseContent = new StringBuilder();
+	// while ((inputLine = in.readLine()) != null) {
+	// responseContent.append(inputLine);
+	// }
+	// in.close();
 
-				// Parse the JSON string
-				ObjectMapper objectMapper = new ObjectMapper();
-				return objectMapper.readValue(responseContent.toString(), clazz);
+	// // Parse the JSON string
+	// ObjectMapper objectMapper = new ObjectMapper();
+	// return objectMapper.readValue(responseContent.toString(), clazz);
 
-			} else {
-				log.error("HTTP GET request failed with response code: " + responseCode + " for URL: " + urlString);
-				// Log error response body if any
-				try (BufferedReader errorStream = new BufferedReader(new InputStreamReader(con.getErrorStream()))) {
-					String errorLine;
-					StringBuilder errorResponse = new StringBuilder();
-					while ((errorLine = errorStream.readLine()) != null) {
-						errorResponse.append(errorLine);
-					}
-					System.err.println("Error response: " + errorResponse.toString());
-				} catch (Exception e) {
-					// Ignore if error stream cannot be read
-				}
-				return null;
-			}
-		} catch (IOException e) {
-			log.error("IOException during fetching/parsing JSON from URL: " + urlString + " - " + e.getMessage());
-			e.printStackTrace();
-			return null;
-		}
-	}
+	// } else {
+	// log.error("HTTP GET request failed with response code: " + responseCode + "
+	// for URL: " + urlString);
+	// // Log error response body if any
+	// try (BufferedReader errorStream = new BufferedReader(new
+	// InputStreamReader(con.getErrorStream()))) {
+	// String errorLine;
+	// StringBuilder errorResponse = new StringBuilder();
+	// while ((errorLine = errorStream.readLine()) != null) {
+	// errorResponse.append(errorLine);
+	// }
+	// System.err.println("Error response: " + errorResponse.toString());
+	// } catch (Exception e) {
+	// // Ignore if error stream cannot be read
+	// }
+	// return null;
+	// }
+	// } catch (IOException e) {
+	// log.error("IOException during fetching/parsing JSON from URL: " + urlString +
+	// " - " + e.getMessage());
+	// e.printStackTrace();
+	// return null;
+	// }
+	// }
 
-	/**
-	 * Fetches content from the given URL and parses it as a JSON object.
-	 *
-	 * @param urlString  The URL to fetch JSON data from.
-	 * @param useCookies Whether to include the configured Numista cookie and USER_AGENT
-	 *                   (useful for numista.com APIs).
-	 * @return A JsonObject if parsing is successful, otherwise null.
-	 */
-	public static String fetchJson(String urlString, boolean useCookies) {
-		try {
-			URL url = URI.create(urlString).toURL();
-			HttpURLConnection con = (HttpURLConnection) url.openConnection();
+	// /**
+	// * Fetches content from the given URL and parses it as a JSON object.
+	// *
+	// * @param urlString The URL to fetch JSON data from.
+	// * @param useCookies Whether to include the configured Numista cookie and
+	// * USER_AGENT
+	// * (useful for numista.com APIs).
+	// * @return A JsonObject if parsing is successful, otherwise null.
+	// */
+	// public static String fetchJson(String urlString, boolean useCookies) {
+	// try {
+	// URL url = URI.create(urlString).toURL();
+	// HttpURLConnection con = (HttpURLConnection) url.openConnection();
 
-			con.setRequestMethod("GET");
-			con.setRequestProperty("Accept", "application/json"); // Indicate we expect JSON
+	// con.setRequestMethod("GET");
+	// con.setRequestProperty("Accept", "application/json"); // Indicate we expect
+	// JSON
 
-			if (useCookies && configuredUseCookies && !configuredNumistaCookie.isEmpty()) {
-				con.setRequestProperty("User-Agent", USER_AGENT);
-				con.setRequestProperty("Cookie", configuredNumistaCookie); // Use with caution if the JSON source is not numista
-			}
+	// if (useCookies && configuredUseCookies && !configuredNumistaCookie.isEmpty())
+	// {
+	// con.setRequestProperty("User-Agent", USER_AGENT);
+	// con.setRequestProperty("Cookie", configuredNumistaCookie); // Use with
+	// caution if the JSON source is not
+	// // numista
+	// }
 
-			int responseCode = con.getResponseCode();
-			if (responseCode >= 200 && responseCode < 300) { // Check for successful response
-				BufferedReader in = new BufferedReader(new InputStreamReader(con.getInputStream()));
-				String inputLine;
-				StringBuilder responseContent = new StringBuilder();
-				while ((inputLine = in.readLine()) != null) {
-					responseContent.append(inputLine);
-				}
-				in.close();
+	// int responseCode = con.getResponseCode();
+	// if (responseCode >= 200 && responseCode < 300) { // Check for successful
+	// response
+	// BufferedReader in = new BufferedReader(new
+	// InputStreamReader(con.getInputStream()));
+	// String inputLine;
+	// StringBuilder responseContent = new StringBuilder();
+	// while ((inputLine = in.readLine()) != null) {
+	// responseContent.append(inputLine);
+	// }
+	// in.close();
 
-				return responseContent.toString();
-			} else {
-				log.error("HTTP GET request failed with response code: " + responseCode + " for URL: " + urlString);
-				// Log error response body if any
-				try (BufferedReader errorStream = new BufferedReader(new InputStreamReader(con.getErrorStream()))) {
-					String errorLine;
-					StringBuilder errorResponse = new StringBuilder();
-					while ((errorLine = errorStream.readLine()) != null) {
-						errorResponse.append(errorLine);
-					}
-					System.err.println("Error response: " + errorResponse.toString());
-				} catch (Exception e) {
-					// Ignore if error stream cannot be read
-				}
-				return null;
-			}
-		} catch (IOException e) {
-			log.error("IOException during fetching/parsing JSON from URL: " + urlString + " - " + e.getMessage());
-			e.printStackTrace();
-			return null;
-		}
-	}
+	// return responseContent.toString();
+	// } else {
+	// log.error("HTTP GET request failed with response code: " + responseCode + "
+	// for URL: " + urlString);
+	// // Log error response body if any
+	// try (BufferedReader errorStream = new BufferedReader(new
+	// InputStreamReader(con.getErrorStream()))) {
+	// String errorLine;
+	// StringBuilder errorResponse = new StringBuilder();
+	// while ((errorLine = errorStream.readLine()) != null) {
+	// errorResponse.append(errorLine);
+	// }
+	// System.err.println("Error response: " + errorResponse.toString());
+	// } catch (Exception e) {
+	// // Ignore if error stream cannot be read
+	// }
+	// return null;
+	// }
+	// } catch (IOException e) {
+	// log.error("IOException during fetching/parsing JSON from URL: " + urlString +
+	// " - " + e.getMessage());
+	// e.printStackTrace();
+	// return null;
+	// }
+	// }
 
 	/**
 	 * Parse string {@code fullName} to find year periods.

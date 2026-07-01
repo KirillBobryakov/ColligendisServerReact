@@ -14,12 +14,15 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
+import com.colligendis.server.database.ColligendisUser;
 import com.colligendis.server.database.ColligendisUserService;
 import com.colligendis.server.database.numista.model.Mint;
 import com.colligendis.server.database.numista.service.MintService;
 import com.colligendis.server.logger.BaseLogger;
-import com.colligendis.server.parser.numista.NumistaParseUtils;
+import com.colligendis.server.util.web.WebPageClient;
+import com.colligendis.server.util.web.WebPageLoadException;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,6 +43,7 @@ public class MintPageParser {
 
 	private final MintService mintService;
 	private final ColligendisUserService colligendisUserService;
+	private final WebPageClient webPageClient;
 
 	private final BaseLogger mintPageParserLogger = new BaseLogger();
 
@@ -57,7 +61,7 @@ public class MintPageParser {
 				return;
 			}
 		} else {
-			Document document = NumistaParseUtils.loadPageByURL(MINTS_URL);
+			Document document = loadPage(MINTS_URL);
 			if (document == null) {
 				System.err.printf("Failed to load mints list: %s%n", MINTS_URL);
 				return;
@@ -89,6 +93,26 @@ public class MintPageParser {
 				.doOnComplete(() -> System.out.println("All mints have been saved."))
 				.doOnError(error -> System.err.println("Fatal error processing mints: " + error.getMessage()))
 				.subscribe();
+	}
+
+	private Document loadPage(String url) {
+		try {
+			String cookie = colligendisUserService.getNumistaParserUserMono()
+					.map(this::resolveCookie)
+					.defaultIfEmpty("")
+					.block();
+			return webPageClient.loadPageDocument(url, cookie).block();
+		} catch (WebPageLoadException e) {
+			log.error("Error loading page: {}", url, e);
+			return null;
+		}
+	}
+
+	private String resolveCookie(ColligendisUser user) {
+		if (user != null && StringUtils.hasText(user.getNumistaCookie())) {
+			return user.getNumistaCookie().strip();
+		}
+		return "";
 	}
 
 	private static void extractMints(Document document, List<Mint> out, Set<String> seenNids) {

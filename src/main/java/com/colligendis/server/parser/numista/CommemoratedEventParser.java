@@ -54,7 +54,7 @@ public class CommemoratedEventParser extends Parser {
 		String evenement = NumistaParseUtils.getAttribute(numistaPage.page.selectFirst("#evenement"),
 				"value");
 		if (evenement == null || evenement.isEmpty()) {
-			log.info("nid: {} - Can't find Commemorated Event on the page",
+			numistaPage.getPipelineStepLogger().debugOrange("nid: {} - Can't find Commemorated Event on the page",
 					numistaPage.nid);
 			return Mono.just(numistaPage);
 		}

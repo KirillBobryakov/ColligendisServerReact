@@ -1,50 +1,31 @@
 package com.colligendis.server.parser;
 
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.Semaphore;
+import java.util.function.Supplier;
 
 import com.colligendis.server.logger.BaseLogger;
 
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Mono;
-import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 
 /**
- * A reusable pause/resume mechanism for reactive parsers.
- * 
- * Can be used as instance field or static field:
- * 
- * <pre>
- * // Instance usage
- * private final PauseLock pauseLock = new PauseLock("MyParser");
- * 
- * // Static usage
- * private static final PauseLock pauseLock = new PauseLock("MyParser");
- * </pre>
- * 
- * Usage in reactive chains:
- * 
- * <pre>
- * pauseLock.awaitIfPaused()
- * 		.then(doSomething())
- * 		.doFinally(signal -> pauseLock.resume());
- * </pre>
+ * Serializes exclusive parser work (e.g. bulk Numista PHP refresh) across concurrent
+ * {@link com.colligendis.server.parser.numista.NumistaPipeline} runs.
+ *
+ * <p>
+ * Use {@link #awaitIdle()} before non-exclusive reads while another parse may be
+ * refreshing shared data. Use {@link #runExclusiveOrElse(Supplier, Supplier)} when
+ * a cache miss may trigger refresh: one caller runs {@code exclusiveWork}, the rest
+ * wait and run {@code afterIdleWork}.
  */
 @Slf4j
 public class PauseLock {
 
 	private final String name;
-	private final AtomicBoolean lock = new AtomicBoolean(false);
-	private volatile boolean paused = false;
-	private volatile Sinks.One<Void> gate = Sinks.one();
-	/** When null, coordination messages go to SLF4J (use for JVM-wide shared locks). */
+	private final Semaphore mutex = new Semaphore(1);
 	private final BaseLogger baseLogger;
 
-	/**
-	 * Global coordination lock: safe to share across all concurrent parses of this
-	 * parser type. Pass a per-call {@link BaseLogger} only if pause traces must
-	 * appear in the page pipeline log (rare); for preventing duplicate DB writes,
-	 * prefer this constructor.
-	 */
 	public PauseLock(String name) {
 		this(name, null);
 	}
@@ -55,81 +36,68 @@ public class PauseLock {
 	}
 
 	/**
-	 * Activates pause. Subsequent calls to {@link #awaitIfPaused()} will block
-	 * until {@link #resume()} is called.
-	 * 
-	 * Thread-safe: only the first concurrent call activates the pause.
-	 * 
-	 * @return true if this call acquired the lock (caller should do the work),
-	 *         false if another thread already holds the lock (caller should wait)
+	 * Waits until no exclusive work holds the lock, then completes without acquiring it.
 	 */
-	public boolean pause() {
-		if (baseLogger != null) {
-			baseLogger.debugOrange("{}: pause requested, currently paused: {}", name, paused);
-		} else {
-			log.debug("{}: pause requested, currently paused: {}", name, paused);
-		}
+	public Mono<Void> awaitIdle() {
+		return Mono.fromCallable(() -> {
+			debug("awaitIdle: waiting for exclusive work to finish");
+			mutex.acquire();
+			mutex.release();
+			debug("awaitIdle: lock is idle");
+			return null;
+		})
+				.subscribeOn(Schedulers.boundedElastic())
+				.then();
+	}
 
-		if (lock.compareAndSet(false, true)) {
-			paused = true;
-			gate = Sinks.one();
-			if (baseLogger != null) {
-				baseLogger.debugOrange("{}: pause activated", name);
-			} else {
-				log.debug("{}: pause activated", name);
-			}
+	/**
+	 * Runs {@code work} exclusively. Concurrent callers block until the current work
+	 * finishes, then each runs {@code work} in turn.
+	 */
+	public <T> Mono<T> runExclusive(Supplier<Mono<T>> work) {
+		return Mono.fromCallable(() -> {
+			debug("runExclusive: acquiring lock");
+			mutex.acquire();
+			debug("runExclusive: lock acquired");
 			return true;
-		} else {
-			if (baseLogger != null) {
-				baseLogger.debugOrange("{}: pause already active", name);
-			} else {
-				log.debug("{}: pause already active", name);
-			}
-			return false;
-		}
+		})
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(acquired -> Mono.defer(work)
+						.doFinally(signal -> {
+							mutex.release();
+							debug("runExclusive: lock released ({})", signal);
+						}));
 	}
 
 	/**
-	 * Resumes processing. All waiting {@link #awaitIfPaused()} calls will complete.
+	 * If the lock is free, runs {@code exclusiveWork} under the lock. Otherwise waits for
+	 * idle and runs {@code afterIdleWork} without holding the lock.
 	 */
-	public void resume() {
+	public <T> Mono<T> runExclusiveOrElse(Supplier<Mono<T>> exclusiveWork, Supplier<Mono<T>> afterIdleWork) {
+		return Mono.fromCallable(() -> mutex.tryAcquire())
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(acquired -> {
+					if (acquired) {
+						debug("runExclusiveOrElse: running exclusive work");
+						return Mono.defer(exclusiveWork)
+								.doFinally(signal -> {
+									mutex.release();
+									debug("runExclusiveOrElse: exclusive work finished ({})", signal);
+								});
+					}
+					debug("runExclusiveOrElse: waiting for exclusive work, then follow-up");
+					return awaitIdle().then(Mono.defer(afterIdleWork));
+				});
+	}
+
+	private void debug(String format, Object... args) {
 		if (baseLogger != null) {
-			baseLogger.debugGreen("{}: resume requested, currently paused: {}", name, paused);
+			baseLogger.debugOrange(name + ": " + format, args);
 		} else {
-			log.debug("{}: resume requested, currently paused: {}", name, paused);
+			log.debug(name + ": " + format, args);
 		}
-		paused = false;
-		lock.set(false);
-		gate.tryEmitEmpty();
-		log.info("{}: resumed", name);
 	}
 
-	/**
-	 * Returns a Mono that completes immediately if not paused,
-	 * or waits until {@link #resume()} is called if paused.
-	 */
-	public Mono<Void> awaitIfPaused() {
-		if (!paused) {
-			return Mono.empty();
-		}
-		if (baseLogger != null) {
-			baseLogger.debugOrange("{}: awaiting resume", name);
-		} else {
-			log.debug("{}: awaiting resume", name);
-		}
-		return gate.asMono();
-	}
-
-	/**
-	 * @return true if currently paused
-	 */
-	public boolean isPaused() {
-		return paused;
-	}
-
-	/**
-	 * @return the name of this pause lock (for logging/debugging)
-	 */
 	public String getName() {
 		return name;
 	}

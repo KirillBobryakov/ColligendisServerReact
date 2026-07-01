@@ -438,6 +438,10 @@ public class NTypePartParser extends Parser {
 			numistaPage.getPipelineStepLogger().debugGreen("Picture set on: {}", picture);
 			nTypePart.setPicture(picture);
 
+			if (pictureAbsoluteUrl == null || pictureAbsoluteUrl.isEmpty()) {
+				return Mono.just(nTypePart);
+			}
+
 			try {
 				String issuerNumistaCode = numistaPage.getIssuer() != null
 						&& numistaPage.getIssuer().getNumistaCode() != null

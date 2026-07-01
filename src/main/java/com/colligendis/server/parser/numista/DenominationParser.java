@@ -4,9 +4,9 @@ import java.util.Map;
 
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 import org.springframework.stereotype.Component;
 
+import com.colligendis.server.database.ColligendisUser;
 import com.colligendis.server.database.numista.model.Denomination;
 import com.colligendis.server.database.numista.service.DenominationService;
 import com.colligendis.server.database.numista.service.NTypeService;
@@ -17,6 +17,8 @@ import com.colligendis.server.database.result.ExecutionStatuses;
 import com.colligendis.server.database.result.FindExecutionStatus;
 import com.colligendis.server.parser.PauseLock;
 import com.colligendis.server.parser.numista.exception.ParserException;
+import com.colligendis.server.util.web.WebPageClient;
+import com.colligendis.server.util.web.WebPageLoadException;
 
 import lombok.RequiredArgsConstructor;
 import reactor.core.publisher.Flux;
@@ -35,6 +37,7 @@ public class DenominationParser extends Parser {
 
 	private final DenominationService denominationService;
 	private final NTypeService nTypeService;
+	private final WebPageClient webPageClient;
 
 	@Override
 	protected Mono<NumistaPage> parse(NumistaPage numistaPage) {
@@ -51,7 +54,7 @@ public class DenominationParser extends Parser {
 			}
 			String denominationNid = denominationAttr.get("value");
 
-			return PAUSE_LOCK.awaitIfPaused()
+			return PAUSE_LOCK.awaitIdle()
 					.then(denominationService.findByNid(denominationNid, numistaPage.getPipelineStepLogger()))
 					.flatMap(executionResult -> {
 						if (!executionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
@@ -61,8 +64,7 @@ public class DenominationParser extends Parser {
 						}
 					})
 					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)
-								|| executionResult.getStatus().equals(CreateNodeExecutionStatus.WAS_CREATED)) {
+						if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
 							return nTypeService.setDenomination(numistaPage.nType, executionResult.getNode(),
 									numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger())
 									.flatMap(rel -> {
@@ -88,48 +90,57 @@ public class DenominationParser extends Parser {
 	private Mono<ExecutionResult<Denomination, FindExecutionStatus>> handleDenominationNotFound(String denominationNid,
 			NumistaPage numistaPage) {
 
-		boolean acquiredLock = PAUSE_LOCK.pause();
-		if (!acquiredLock) {
-			// Another thread is already loading denominations - wait and retry
-			return PAUSE_LOCK.awaitIfPaused()
-					.then(denominationService.findByNid(denominationNid, numistaPage.getPipelineStepLogger()));
-		}
-
-		return parseDenominationsByCurrencyCodeFromPHPRequest(numistaPage, denominationNid)
-				.subscribeOn(Schedulers.boundedElastic())
-				.doFinally(signal -> PAUSE_LOCK.resume())
-				.then(denominationService.findByNid(denominationNid, numistaPage.getPipelineStepLogger()));
+		return PAUSE_LOCK.runExclusiveOrElse(
+				() -> parseDenominationsByCurrencyCodeFromPHPRequest(numistaPage, denominationNid)
+						.subscribeOn(Schedulers.boundedElastic())
+						.then(denominationService.findByNid(denominationNid, numistaPage.getPipelineStepLogger())),
+				() -> denominationService.findByNid(denominationNid, numistaPage.getPipelineStepLogger()));
 	}
 
 	public static final String DENOMINATIONS_BY_CURRENCY_PREFIX = "https://en.numista.com/catalogue/get_denominations.php?";
 
 	private Mono<Boolean> parseDenominationsByCurrencyCodeFromPHPRequest(NumistaPage numistaPage, String prefill) {
 		final String currencyNid = numistaPage.currency.getNid();
+		String url = DENOMINATIONS_BY_CURRENCY_PREFIX + "currency=" + currencyNid + "&prefill=" + prefill;
 
-		Document denominationsPHPDocument = NumistaParseUtils.loadPageByURL(
-				DENOMINATIONS_BY_CURRENCY_PREFIX + "currency=" + currencyNid + "&prefill=" + prefill);
+		return loadHtmlPage(url, numistaPage)
+				.flatMap(denominationsPHPDocument -> {
+					if (!denominationsPHPDocument.select("optgroup").isEmpty()) {
+						numistaPage.getPipelineStepLogger()
+								.error("Find OPTGROUP while parsing Denominations by Currency Code from PHP request for nid: {}",
+										numistaPage.nid);
+						return Mono.just(false);
+					}
+					return Flux.fromIterable(denominationsPHPDocument.select("option"))
+							.flatMap(option -> processDenominationOption(option, numistaPage))
+							.collectList()
+							.thenReturn(true);
+				})
+				.switchIfEmpty(Mono.defer(() -> {
+					numistaPage.getPipelineStepLogger()
+							.error("Can't load Denominations by Currency Code from PHP request for nid: {}",
+									numistaPage.nid);
+					return Mono.just(false);
+				}));
+	}
 
-		if (denominationsPHPDocument == null) {
-			numistaPage.getPipelineStepLogger()
-					.error("Can't load Denominations by Currency Code from PHP request for nid: {}", numistaPage.nid);
-			return Mono.just(false);
+	private Mono<Document> loadHtmlPage(String url, NumistaPage numistaPage) {
+		return numistaPage.getNumistaParserUserMono()
+				.map(DenominationParser::resolveCookie)
+				.defaultIfEmpty("")
+				.flatMap(cookie -> webPageClient.loadPageDocument(url, cookie))
+				.onErrorResume(WebPageLoadException.class, e -> {
+					numistaPage.getPipelineStepLogger().error("DenominationParser: can't load {}: {}", url,
+							e.getMessage());
+					return Mono.empty();
+				});
+	}
+
+	private static String resolveCookie(ColligendisUser user) {
+		if (user != null && user.getNumistaCookie() != null && !user.getNumistaCookie().isBlank()) {
+			return user.getNumistaCookie().strip();
 		}
-
-		Elements optgroups = denominationsPHPDocument.select("optgroup");
-
-		if (!optgroups.isEmpty()) { // need to understand what to do with OPTGROUP in IssuingEntities
-			numistaPage.getPipelineStepLogger()
-					.error("Find OPTGROUP while parsing Denominations by Currency Code from PHP request for nid: {}",
-							numistaPage.nid);
-			return Mono.just(false);
-		}
-
-		Elements options = denominationsPHPDocument.select("option");
-
-		return Flux.fromIterable(options)
-				.flatMap(option -> processDenominationOption(option, numistaPage))
-				.collectList()
-				.thenReturn(true);
+		return "";
 	}
 
 	private Mono<ExecutionResult<Denomination, ? extends ExecutionStatuses>> processDenominationOption(Element option,

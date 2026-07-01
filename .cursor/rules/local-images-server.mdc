@@ -1,0 +1,21 @@
+---
+description: Serve local filesystem images through LocalImageController only
+globs: src/main/java/**/*.java
+alwaysApply: false
+---
+
+# Local images (server)
+
+All Numista images stored on the server filesystem (NType parts, signatures, catalogue thumbnails) must be exposed through **one** public endpoint:
+
+`GET /api/public/images/local?path={url-encoded-absolute-local-path}`
+
+Optional query: `size=SMALL` for resized catalogue thumbnails.
+
+## Rules
+
+- Implement and extend file serving only in `LocalImageController` and `LocalImageFileService`.
+- Build client-facing URLs with `LocalImageUrls.toClientUrl(localPath)` or `toClientUrl(localPath, small)`.
+- Never return raw filesystem paths in JSON — only `/api/public/images/local?...` URLs.
+- Validate every requested path is under configured storage roots (`numista.images.ntypes.storage-root`, `numista.images.signatures.storage-root`).
+- Do **not** add per-entity image controllers (e.g. `/api/public/images/ntype/{nid}/{side}`). That legacy route is removed.

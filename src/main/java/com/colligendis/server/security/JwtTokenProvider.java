@@ -92,4 +92,18 @@ public class JwtTokenProvider {
             return false;
         }
     }
+
+    public boolean isRefreshToken(String token) {
+        try {
+            Claims claims = Jwts.parser()
+                    .verifyWith(getSigningKey())
+                    .build()
+                    .parseSignedClaims(token)
+                    .getPayload();
+            return "refresh".equals(claims.get("type"));
+        } catch (JwtException e) {
+            log.debug("Token is not a valid refresh token: {}", e.getMessage());
+            return false;
+        }
+    }
 }

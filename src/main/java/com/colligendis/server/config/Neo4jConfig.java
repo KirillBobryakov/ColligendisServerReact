@@ -37,6 +37,7 @@ public class Neo4jConfig {
 		Config config = Config.builder()
 				.withMaxConnectionPoolSize(50) // Reduced from 100 to better match actual needs
 				.withMaxConnectionLifetime(1, TimeUnit.HOURS) // Connections live for 1 hour
+				.withConnectionLivenessCheckTimeout(30, TimeUnit.SECONDS) // Validate idle sockets before reuse
 				.withConnectionAcquisitionTimeout(120, TimeUnit.SECONDS) // Increase timeout for acquisition
 				.withConnectionTimeout(30, TimeUnit.SECONDS) // Connection establishment timeout
 				.withMaxTransactionRetryTime(30, TimeUnit.SECONDS) // Retry failed transactions

@@ -6,6 +6,8 @@ import java.util.List;
 import com.colligendis.server.database.AbstractNode;
 import com.colligendis.server.database.numista.model.techdata.LetteringScript;
 import com.colligendis.server.database.numista.model.techdata.PART_TYPE;
+import com.colligendis.server.util.UnicodeNormalizer;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -32,6 +34,7 @@ public class NTypePart extends AbstractNode {
 
 	private String description;
 	private String lettering;
+	private String normalizedLettering;
 
 	public static final String WRITE_ON_SCRIPT = "WRITE_ON_SCRIPT";
 	private List<LetteringScript> letteringScripts = new ArrayList<>();
@@ -40,5 +43,13 @@ public class NTypePart extends AbstractNode {
 	private String letteringTranslation;
 	private String letteringTranslationRu;
 	private String picture;
+
+	@JsonIgnore
+	private String pictureLocalPath;
+
+	public void setLettering(String lettering) {
+		this.lettering = lettering;
+		this.normalizedLettering = UnicodeNormalizer.normalize(lettering);
+	}
 
 }

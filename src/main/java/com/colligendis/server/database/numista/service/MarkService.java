@@ -8,6 +8,7 @@ import com.colligendis.server.database.numista.model.Mark;
 import com.colligendis.server.database.result.CreateNodeExecutionStatus;
 import com.colligendis.server.database.result.ExecutionResult;
 import com.colligendis.server.database.result.FindExecutionStatus;
+import com.colligendis.server.database.result.UpdateExecutionStatus;
 import com.colligendis.server.logger.BaseLogger;
 
 import reactor.core.publisher.Mono;
@@ -24,5 +25,16 @@ public class MarkService extends AbstractService {
 
 	public Mono<ExecutionResult<Mark, FindExecutionStatus>> findByCode(String code, BaseLogger baseLogger) {
 		return super.findNodeByUniquePropertyValue("code", code, Mark.LABEL, Mark.class, baseLogger);
+	}
+
+	public Mono<ExecutionResult<Mark, FindExecutionStatus>> findByNid(String nid, BaseLogger baseLogger) {
+		return super.findNodeByUniquePropertyValue("nid", nid, Mark.LABEL, Mark.class, baseLogger);
+	}
+
+	public Mono<ExecutionResult<Mark, UpdateExecutionStatus>> update(Mark mark,
+			Mono<ColligendisUser> colligendisUserMono,
+			BaseLogger baseLogger) {
+		return colligendisUserMono
+				.flatMap(colligendisUser -> super.updateNodeProperties(mark, colligendisUser, Mark.class, baseLogger));
 	}
 }

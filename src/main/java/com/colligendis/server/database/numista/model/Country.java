@@ -4,14 +4,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.colligendis.server.database.AbstractNode;
+import com.colligendis.server.util.UnicodeNormalizer;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
 import lombok.ToString;
 
 @Data
-@EqualsAndHashCode(callSuper = true)
+@EqualsAndHashCode(callSuper = true, exclude = { "parentSubject" })
 @ToString(callSuper = true, onlyExplicitlyIncluded = true)
+@NoArgsConstructor
 public class Country extends AbstractNode {
 
 	public static final String LABEL = "COUNTRY";
@@ -23,12 +26,21 @@ public class Country extends AbstractNode {
 	 */
 	private String name;
 
+	private String normalizedName;
+
 	private String numistaCode;
 
 	private List<String> ruAlternativeNames = new ArrayList<>();
 
 	public static final String PARENT_SUBJECT = "PARENT_SUBJECT";
 	private Subject parentSubject;
+
+	private int countNTypesOnNumista;
+
+	public void setName(String name) {
+		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
+	}
 
 	public void addRuAlternativeName(String ruAlternativeName) {
 

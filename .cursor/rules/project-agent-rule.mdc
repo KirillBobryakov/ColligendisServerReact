@@ -1,0 +1,34 @@
+---
+description: Core agent behavior for this repository
+alwaysApply: true
+---
+# Colligendis Agent Rule
+
+Use these defaults for all changes in this repository:
+
+- Keep edits minimal and targeted; do not refactor unrelated code.
+- Preserve existing architecture and naming conventions in `com.colligendis.server`.
+- Prefer consistency with nearby code over introducing new patterns.
+- Never delete or revert user changes unless explicitly requested.
+
+## Java/Spring Conventions
+
+- Use constructor injection and Spring stereotypes (`@Service`, `@Component`, `@RestController`) consistently.
+- Keep controllers thin; move parsing/business logic to services/parsers.
+- Add or update DTOs/entities carefully to avoid breaking JSON/API contracts.
+- Favor clear method names and small methods over clever abstractions.
+
+## Safety and Validation
+
+- Run focused checks after meaningful edits (tests or build task when feasible).
+- If touching parsing code, handle null/empty/format edge cases explicitly.
+- If introducing new endpoints, ensure authentication/authorization behavior remains correct.
+- Avoid adding dependencies unless necessary.
+
+## Neo4j / Cypher
+
+- Before **creating or materially changing** any Neo4j Cypher (new queries, relationship types, labels, or lifecycle assumptions), **read** `.cursor/docs/neo4j-data-model.md` so labels, relationship directions, `uuid` usage, and version/delete conventions stay consistent with the project.
+- For **search or filter by name** (or similar text), match on the stored **`normalized*`** property (for example `normalizedName`, `normalizedTitle`), and normalize the search term the same way (`UnicodeNormalizer` in Java)—do not rely on raw display-only fields for matching unless there is a deliberate exception.
+
+
+

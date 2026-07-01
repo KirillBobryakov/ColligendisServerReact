@@ -33,9 +33,8 @@ public class IssuerParser extends Parser {
 
 			if (emetteur == null) {
 				numistaPage.getPipelineStepLogger()
-						.error("Issuer: not found for nid: {} - Can't find Issuer on the page", numistaPage.nid);
-				return Mono.error(new ParserException(
-						"Can't find Issuer on the page for nid: " + numistaPage.nid));
+						.warning("Issuer: not found for nid: {} - Can't find Issuer on the page", numistaPage.nid);
+				return Mono.just(numistaPage);
 			}
 
 			String code = emetteur.get("value");

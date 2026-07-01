@@ -79,13 +79,13 @@ public class ReferenceNumberParser extends Parser {
 
 										numistaPage.getPipelineStepLogger()
 												.info("Catalogue references linked to NType: {}",
-														numistaPage.nType.nid);
+														numistaPage.nType.getNid());
 										return Mono.just(numistaPage);
 									} else {
 
 										return Mono.<NumistaPage>error(
 												new ParserException("Failed to link catalogue references to NType: "
-														+ numistaPage.nType.nid));
+														+ numistaPage.nType.getNid()));
 									}
 								});
 					});

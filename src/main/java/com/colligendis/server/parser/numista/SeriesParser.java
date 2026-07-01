@@ -62,7 +62,7 @@ public class SeriesParser extends Parser {
 			String seriesName = Objects.requireNonNull(seriesMap).get("text");
 			String seriesNid = Objects.requireNonNull(seriesMap).get("value");
 
-			return PAUSE_LOCK.awaitIfPaused()
+			return PAUSE_LOCK.awaitIdle()
 					.then(seriesService.findByNid(seriesNid, numistaPage.getPipelineStepLogger()))
 					.flatMap(executionResult -> {
 						switch (executionResult.getStatus()) {
@@ -81,24 +81,19 @@ public class SeriesParser extends Parser {
 
 	private Mono<NumistaPage> handleSeriesNotFound(String seriesNid, String seriesName,
 			NumistaPage numistaPage) {
-		boolean acquiredLock = PAUSE_LOCK.pause();
-		if (!acquiredLock) {
-			return PAUSE_LOCK.awaitIfPaused()
-					.then(seriesService.findByNid(seriesNid, numistaPage.getPipelineStepLogger()))
-					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
-							return linkSeriesToNType(executionResult, seriesNid, numistaPage);
-						}
-						executionResult.logError(numistaPage.getPipelineStepLogger());
-						return Mono.error(new ParserException("Failed to find Series: " + seriesNid));
-					});
-		}
-
-		return seriesService
-				.findByNidWithCreate(seriesNid, seriesName, numistaPage.getNumistaParserUserMono(),
-						numistaPage.getPipelineStepLogger())
-				.doFinally(signal -> PAUSE_LOCK.resume())
-				.flatMap(executionResult -> linkSeriesToNType(executionResult, seriesNid, numistaPage));
+		return PAUSE_LOCK.runExclusiveOrElse(
+				() -> seriesService
+						.findByNidWithCreate(seriesNid, seriesName, numistaPage.getNumistaParserUserMono(),
+								numistaPage.getPipelineStepLogger())
+						.flatMap(executionResult -> linkSeriesToNType(executionResult, seriesNid, numistaPage)),
+				() -> seriesService.findByNid(seriesNid, numistaPage.getPipelineStepLogger())
+						.flatMap(executionResult -> {
+							if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
+								return linkSeriesToNType(executionResult, seriesNid, numistaPage);
+							}
+							executionResult.logError(numistaPage.getPipelineStepLogger());
+							return Mono.error(new ParserException("Failed to find Series: " + seriesNid));
+						}));
 	}
 
 	private Mono<NumistaPage> linkSeriesToNType(ExecutionResult<Series, ? extends ExecutionStatuses> executionResult,

@@ -7,6 +7,7 @@ import com.colligendis.server.database.AbstractNode;
 import com.colligendis.server.database.numista.model.techdata.Composition;
 import com.colligendis.server.database.numista.model.techdata.Shape;
 import com.colligendis.server.database.numista.model.techdata.Technique;
+import com.colligendis.server.util.UnicodeNormalizer;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -17,15 +18,21 @@ import reactor.core.publisher.Mono;
 @EqualsAndHashCode(callSuper = true)
 @NoArgsConstructor
 public class NType extends AbstractNode {
-	public final static String LABEL = "NTYPE";
+	public static final String LABEL = "NTYPE";
 
 	public NType(String nid) {
 		this.nid = nid;
 	}
 
-	public String nid;
+	private String nid;
 
-	public String title;
+	private String title;
+	private String normalizedTitle;
+
+	/**
+	 * ISO date (yyyy-MM-dd) of the last time this NType was parsed from Numista.
+	 */
+	private String parsingDate;
 
 	public static final String HAS_COLLECTIBLE_TYPE = "HAS_COLLECTIBLE_TYPE";
 	private CollectibleType collectibleType;
@@ -39,11 +46,11 @@ public class NType extends AbstractNode {
 	public static final String ISSUED_BY_ISSUING_ENTITY = "ISSUED_BY_ISSUING_ENTITY";
 	private List<IssuingEntity> issuingEntities = new ArrayList<>();
 
-	public final static String HAS_CURRENCY = "HAS_CURRENCY";
+	public static final String HAS_CURRENCY = "HAS_CURRENCY";
 	private String currencyUuid;
 	private Mono<Currency> currency;
 
-	public final static String DENOMINATED_IN = "DENOMINATED_IN";
+	public static final String DENOMINATED_IN = "DENOMINATED_IN";
 	private Denomination denomination;
 
 	public static final String COMMEMORATE_FOR = "COMMEMORATE_FOR";
@@ -77,10 +84,10 @@ public class NType extends AbstractNode {
 
 	/*
 	 * Select the appropriate option:
-	 * Unknown: for coins that were never in circulation, such as patterns, and for
+	 * UNKNOWN: for coins that were never in circulation, such as patterns, and for
 	 * coins with an uncertain legal tender status.
-	 * No: for coins that are currently accepted as legal tender
-	 * Yes: for coins that are no longer legal tender.
+	 * NO: for coins that are currently accepted as legal tender
+	 * YES: for coins that are no longer legal tender.
 	 * 
 	 * Date: for demonetized coins, record the date of the withdrawal of the legal
 	 * tender status as yyyy-mm-dd. Note that this date may be different from the
@@ -89,13 +96,32 @@ public class NType extends AbstractNode {
 	 * 2001-12-31
 	 * 1875-00-00
 	 */
-	/*
-	 * Has only 3 values:
-	 * 0 - No, Didn't demonetized
-	 * 1 - Yes, demonetized
-	 * 2 - Unknown
-	 */
-	private String demonetized;
+	public enum DemonetizedStatus {
+		NO("0"), // No, Didn't demonetized
+		YES("1"), // Yes, demonetized
+		UNKNOWN("2"); // Unknown
+
+		private final String code;
+
+		DemonetizedStatus(String code) {
+			this.code = code;
+		}
+
+		public String getCode() {
+			return code;
+		}
+
+		public static DemonetizedStatus fromCode(String code) {
+			for (DemonetizedStatus status : DemonetizedStatus.values()) {
+				if (status.code.equals(code)) {
+					return status;
+				}
+			}
+			return null;
+		}
+	}
+
+	private DemonetizedStatus demonetized;
 	private String demonetizationYear;
 	private String demonetizationMonth;
 	private String demonetizationDay;
@@ -145,4 +171,8 @@ public class NType extends AbstractNode {
 	public static final String HAS_VARIANT = "HAS_VARIANT";
 	private List<Variant> variants = new ArrayList<>();
 
+	public void setTitle(String title) {
+		this.title = title;
+		this.normalizedTitle = UnicodeNormalizer.normalize(title);
+	}
 }

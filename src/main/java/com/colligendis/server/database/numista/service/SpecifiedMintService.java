@@ -31,6 +31,7 @@ public class SpecifiedMintService extends AbstractService {
 			String rowIdentifier,
 			Mint mint,
 			Mintmark mintmarkOrNull, Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
+
 		Mono<ExecutionResult<SpecifiedMint, FindExecutionStatus>> findMono = mintmarkOrNull != null
 				? findByRowIdentifierMintAndMintmark(rowIdentifier, mint.getUuid(), mintmarkOrNull.getUuid(),
 						baseLogger)
@@ -52,16 +53,25 @@ public class SpecifiedMintService extends AbstractService {
 			String rowIdentifier,
 			String mintUuid, String mintmarkUuid, BaseLogger baseLogger) {
 		String query = """
-				MATCH (sm:SPECIFIED_MINT {identifier: $identifier})-[:WITH_MINT]->(m:MINT {uuid: $mintUuid})
-				MATCH (sm)-[:WITH_MINTMARK]->(mm:MINTMARK {uuid: $mintmarkUuid})
+				MATCH (sm:SPECIFIED_MINT)-[:WITH_MINT]->(m:MINT {uuid: $mintUuid}), (sm)-[:WITH_MINTMARK]->(mm:MINTMARK {uuid: $mintmarkUuid})
+				WITH sm, mm
+				WHERE
+					(
+						$identifier IS NOT NULL AND $identifier <> '' AND sm.identifier = $identifier
+					)
+					OR
+					(
+						($identifier IS NULL OR $identifier = '')
+						AND (sm.identifier IS NULL OR sm.identifier = '')
+					)
 				WITH collect(sm) AS nodes
 				RETURN
-					CASE WHEN size(nodes) = 0 THEN NULL ELSE nodes[0] END AS resultNode,
-					CASE
-						WHEN size(nodes) = 0 THEN 'NODE_IS_NOT_FOUND'
-						WHEN size(nodes) = 1 THEN 'NODE_IS_FOUND'
-						ELSE 'MORE_THAN_ONE_NODE_IS_FOUND'
-					END AS status
+				    CASE WHEN size(nodes) = 0 THEN NULL ELSE nodes[0] END AS resultNode,
+				    CASE
+				        WHEN size(nodes) = 0 THEN 'NOT_FOUND'
+				        WHEN size(nodes) = 1 THEN 'FOUND'
+				        ELSE 'MORE_THAN_ONE_FOUND'
+				    END AS status
 				""";
 		Map<String, Object> parameters = Map.of("identifier", rowIdentifier, "mintUuid", mintUuid, "mintmarkUuid",
 				mintmarkUuid);
@@ -119,15 +129,21 @@ public class SpecifiedMintService extends AbstractService {
 			String mintUuid,
 			BaseLogger baseLogger) {
 		String query = """
-				MATCH (sm:SPECIFIED_MINT {identifier: $identifier})-[:WITH_MINT]->(m:MINT {uuid: $mintUuid})
+				MATCH (sm:SPECIFIED_MINT)-[:WITH_MINT]->(m:MINT {uuid: $mintUuid})
+				WHERE NOT EXISTS {MATCH (sm)-[:WITH_MINTMARK]->(:MINTMARK)}
+					AND (
+						($identifier <> "" AND sm.identifier = $identifier)
+						OR
+						($identifier = "" AND (sm.identifier IS NULL OR sm.identifier = ""))
+					)
 				WITH collect(sm) AS nodes
 				RETURN
-					CASE WHEN size(nodes) = 0 THEN NULL ELSE nodes[0] END AS resultNode,
-					CASE
-						WHEN size(nodes) = 0 THEN 'NODE_IS_NOT_FOUND'
-						WHEN size(nodes) = 1 THEN 'NODE_IS_FOUND'
-						ELSE 'MORE_THAN_ONE_NODE_IS_FOUND'
-					END AS status
+				    CASE WHEN size(nodes) = 0 THEN NULL ELSE nodes[0] END AS resultNode,
+				    CASE
+				        WHEN size(nodes) = 0 THEN 'NOT_FOUND'
+				        WHEN size(nodes) = 1 THEN 'FOUND'
+				        ELSE 'MORE_THAN_ONE_FOUND'
+				    END AS status
 				""";
 		Map<String, Object> parameters = Map.of("identifier", rowIdentifier, "mintUuid", mintUuid);
 		return executeReadMono(query, parameters,
@@ -221,9 +237,9 @@ public class SpecifiedMintService extends AbstractService {
 				RETURN
 					CASE WHEN size(nodes) = 0 THEN NULL ELSE nodes[0] END AS resultNode,
 					CASE
-						WHEN size(nodes) = 0 THEN 'NODE_IS_NOT_FOUND'
-						WHEN size(nodes) = 1 THEN 'NODE_IS_FOUND'
-						ELSE 'MORE_THAN_ONE_NODE_IS_FOUND'
+						WHEN size(nodes) = 0 THEN 'NOT_FOUND'
+						WHEN size(nodes) = 1 THEN 'FOUND'
+						ELSE 'MORE_THAN_ONE_FOUND'
 					END AS status
 				""";
 		Map<String, Object> parameters = Map.of("identifier", identifier, "nTypeUuid", nTypeUuid);

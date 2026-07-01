@@ -1,6 +1,7 @@
 package com.colligendis.server.database.numista.model;
 
 import com.colligendis.server.database.AbstractNode;
+import com.colligendis.server.util.UnicodeNormalizer;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -16,5 +17,17 @@ public class Artist extends AbstractNode {
 
 	private String nid;
 	private String name;
+	private String normalizedName;
+
+	public Artist(String nid, String name) {
+		this.nid = nid;
+		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
+	}
+
+	public void setName(String name) {
+		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
+	}
 
 }

@@ -92,6 +92,33 @@ public class UserService {
 	}
 
 	@LogExecutionTime
+	public Mono<User> findByEmail(String email) {
+		log.debug("Finding user by email: {}", email);
+
+		String cypher = "MATCH (u:User {email: $email}) RETURN u";
+
+		return Flux.usingWhen(
+				Mono.just(driver.session(ReactiveSession.class, SessionConfig.builder().withDatabase("neo4j").build())),
+				(ReactiveSession session) -> Flux.from(session.run(cypher, Values.parameters("email", email)))
+						.flatMap(result -> Flux.from(result.records())
+								.map(record -> mapToUser(record.get("u").asMap()))),
+				ReactiveSession::close)
+				.next();
+	}
+
+	@LogExecutionTime
+	public Mono<Boolean> existsByUsername(String username) {
+		String cypher = "MATCH (u:User {username: $username}) RETURN count(u) AS count";
+		return countQuery(cypher, Values.parameters("username", username));
+	}
+
+	@LogExecutionTime
+	public Mono<Boolean> existsByEmail(String email) {
+		String cypher = "MATCH (u:User {email: $email}) RETURN count(u) AS count";
+		return countQuery(cypher, Values.parameters("email", email));
+	}
+
+	@LogExecutionTime
 	public Mono<User> findByUsername(String username) {
 		log.debug("Finding user by username: {}", username);
 
@@ -170,6 +197,17 @@ public class UserService {
 				session -> Mono.from(session.close()))
 				.doOnSuccess(v -> log.info("User deleted successfully: {}", id))
 				.doOnError(error -> log.error("Failed to delete user: {}", error.getMessage()));
+	}
+
+	private Mono<Boolean> countQuery(String cypher, org.neo4j.driver.Value parameters) {
+		return Flux.usingWhen(
+				Mono.just(driver.session(ReactiveSession.class, SessionConfig.builder().withDatabase("neo4j").build())),
+				(ReactiveSession session) -> Flux.from(session.run(cypher, parameters))
+						.flatMap(result -> Flux.from(result.records())
+								.map(record -> record.get("count").asLong() > 0)),
+				ReactiveSession::close)
+				.next()
+				.defaultIfEmpty(false);
 	}
 
 	private User mapToUser(Map<String, Object> map) {

@@ -1,6 +1,7 @@
 package com.colligendis.server.database.numista.model;
 
 import com.colligendis.server.database.AbstractNode;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -17,6 +18,8 @@ public class Signature extends AbstractNode {
 	private String nid; // id
 	private String name; // text
 	private String pictureUrl; // image
+
+	@JsonIgnore
 	private String pictureLocalPath;
 
 }

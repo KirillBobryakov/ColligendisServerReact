@@ -1,6 +1,7 @@
 package com.colligendis.server.database.numista.model;
 
 import com.colligendis.server.database.AbstractNode;
+import com.colligendis.server.util.UnicodeNormalizer;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -52,6 +53,8 @@ public class IssuingEntity extends AbstractNode {
 	private String nid;
 	private String name;
 
+	private String normalizedName;
+
 	public static final String ISSUES_WHEN_BEEN = "ISSUES_WHEN_BEEN";
 	private Issuer issuer;
 
@@ -60,6 +63,12 @@ public class IssuingEntity extends AbstractNode {
 	public IssuingEntity(String nid, String name) {
 		this.nid = nid;
 		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
+	}
+
+	public void setName(String name) {
+		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
 	}
 
 	// /catalogue/get_issuing_entities.php?country=freiburg-im-breisgau_notgeld&prefill=

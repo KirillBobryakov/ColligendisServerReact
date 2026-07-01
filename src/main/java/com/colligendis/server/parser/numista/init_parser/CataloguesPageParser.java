@@ -8,13 +8,17 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
+import com.colligendis.server.database.ColligendisUser;
+import com.colligendis.server.database.ColligendisUserService;
 import com.colligendis.server.database.numista.model.Author;
 import com.colligendis.server.database.numista.model.Catalogue;
 import com.colligendis.server.database.numista.service.AuthorService;
 import com.colligendis.server.database.numista.service.CatalogueService;
 import com.colligendis.server.logger.BaseLogger;
-import com.colligendis.server.parser.numista.NumistaParseUtils;
+import com.colligendis.server.util.web.WebPageClient;
+import com.colligendis.server.util.web.WebPageLoadException;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -36,6 +40,8 @@ public class CataloguesPageParser {
 
 	private final CatalogueService catalogueService;
 	private final AuthorService authorService;
+	private final ColligendisUserService colligendisUserService;
+	private final WebPageClient webPageClient;
 
 	private final BaseLogger cataloguesPageParserLogger = new BaseLogger();
 
@@ -51,7 +57,11 @@ public class CataloguesPageParser {
 			}
 		} else {
 
-			document = NumistaParseUtils.loadPageByURL(CATALOGUES_URL);
+			document = loadPage(CATALOGUES_URL);
+			if (document == null) {
+				log.error("Failed to load catalogues page: {}", CATALOGUES_URL);
+				return;
+			}
 
 			try {
 
@@ -113,7 +123,11 @@ public class CataloguesPageParser {
 				return;
 			}
 		} else {
-			document = NumistaParseUtils.loadPageByURL(AUTHORS_URL);
+			document = loadPage(AUTHORS_URL);
+			if (document == null) {
+				log.error("Failed to load authors page: {}", AUTHORS_URL);
+				return;
+			}
 			try {
 
 				java.nio.file.Files.createDirectories(
@@ -225,4 +239,24 @@ public class CataloguesPageParser {
 	// .subscribe();
 
 	// }
+
+	private Document loadPage(String url) {
+		try {
+			String cookie = colligendisUserService.getNumistaParserUserMono()
+					.map(this::resolveCookie)
+					.defaultIfEmpty("")
+					.block();
+			return webPageClient.loadPageDocument(url, cookie).block();
+		} catch (WebPageLoadException e) {
+			log.error("Error loading page: {}", url, e);
+			return null;
+		}
+	}
+
+	private String resolveCookie(ColligendisUser user) {
+		if (user != null && StringUtils.hasText(user.getNumistaCookie())) {
+			return user.getNumistaCookie().strip();
+		}
+		return "";
+	}
 }

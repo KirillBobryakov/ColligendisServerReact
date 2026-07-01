@@ -4,6 +4,7 @@ import com.colligendis.server.database.AbstractNode;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
 
 /*
  * Assign the coin to an appropriate category.
@@ -21,6 +22,7 @@ import lombok.EqualsAndHashCode;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
+@NoArgsConstructor
 public class CollectibleType extends AbstractNode {
 	public static final String LABEL = "COLLECTIBLE_TYPE";
 
@@ -29,6 +31,7 @@ public class CollectibleType extends AbstractNode {
 	public static final String MEDALS_CODE = "149";
 	public static final String TOKENS_CODE = "150";
 	public static final String PAPER_EXONUMIA_CODE = "143";
+	public static final String ALL = "all";
 	/*
 	 * Coin
 	 * Banknote
@@ -161,6 +164,8 @@ public class CollectibleType extends AbstractNode {
 
 	private String code;
 	private String name;
+
+	private int countNTypesOnNumista;
 
 	public static final String HAS_COLLECTIBLE_TYPE_CHILD = "HAS_COLLECTIBLE_TYPE_CHILD";
 

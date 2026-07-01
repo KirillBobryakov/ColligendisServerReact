@@ -10,7 +10,6 @@ import com.colligendis.server.database.ColligendisUser;
 import com.colligendis.server.database.numista.model.CatalogueReference;
 import com.colligendis.server.database.numista.model.Mark;
 import com.colligendis.server.database.numista.model.Signature;
-import com.colligendis.server.database.numista.model.SpecifiedMint;
 import com.colligendis.server.database.numista.model.Variant;
 import com.colligendis.server.database.result.CreateNodeExecutionStatus;
 import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
@@ -50,14 +49,6 @@ public class VariantService extends AbstractService {
 				.flatMap(colligendisUser -> super.createUniqueOutgoingRelationships(variant, signatures,
 						Signature.class,
 						Variant.WITH_SIGNATURE, colligendisUser, baseLogger));
-	}
-
-	public Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> setSpecifiedMint(Variant variant,
-			SpecifiedMint specifiedMint,
-			Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
-		return colligendisUserMono
-				.flatMap(colligendisUser -> super.createUniqueTargetedRelationship(variant, specifiedMint,
-						Variant.WITH_SPECIFIED_MINT, colligendisUser, baseLogger));
 	}
 
 	public Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> setMarks(Variant variant,

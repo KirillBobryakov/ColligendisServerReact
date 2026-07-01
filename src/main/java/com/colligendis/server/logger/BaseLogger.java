@@ -20,10 +20,7 @@ public class BaseLogger {
 
 	protected final ConcurrentLinkedQueue<IndentLine> indentLines = new ConcurrentLinkedQueue<>();
 
-	// private final LogLevel indentLevel = LogLevel.valueOf(
-	// System.getProperty("logging.level.com.colligendis", "DEBUG").toUpperCase());
-
-	private final LogLevel indentLevel = LogLevel.TRACE;
+	private final LogLevel indentLevel = LogLevel.DEBUG;
 
 	public static final String ANSI_BLACK = "\u001B[30m";
 	public static final String ANSI_RED = "\u001B[31m";
@@ -49,7 +46,6 @@ public class BaseLogger {
 	}
 
 	public BaseLogger() {
-		System.out.println("BaseLogger indentLevel: " + indentLevel);
 	}
 
 	/**

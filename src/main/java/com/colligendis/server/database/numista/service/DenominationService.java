@@ -65,4 +65,5 @@ public class DenominationService extends AbstractService {
 						Denomination.UNDER_CURRENCY,
 						colligendisUser, baseLogger));
 	}
+
 }

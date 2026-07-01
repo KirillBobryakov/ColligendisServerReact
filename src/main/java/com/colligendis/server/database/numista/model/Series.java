@@ -1,6 +1,7 @@
 package com.colligendis.server.database.numista.model;
 
 import com.colligendis.server.database.AbstractNode;
+import com.colligendis.server.util.UnicodeNormalizer;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -12,9 +13,20 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class Series extends AbstractNode {
-    public static final String LABEL = "SERIES";
+	public static final String LABEL = "SERIES";
 
-    public String nid;
-    public String name;
+	private String nid;
+	private String name;
+	private String normalizedName;
 
+	public Series(String nid, String name) {
+		this.nid = nid;
+		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
+	}
+
+	public void setName(String name) {
+		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
+	}
 }

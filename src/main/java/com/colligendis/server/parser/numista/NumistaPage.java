@@ -10,13 +10,10 @@ import com.colligendis.server.database.numista.model.Denomination;
 import com.colligendis.server.database.numista.model.Issuer;
 import com.colligendis.server.database.numista.model.NType;
 import com.colligendis.server.database.numista.service.NTypeService;
-import com.colligendis.server.database.result.CreateNodeExecutionStatus;
-import com.colligendis.server.database.result.FindExecutionStatus;
 import com.colligendis.server.database.result.UpdateExecutionStatus;
 import com.colligendis.server.logger.BaseLogger;
 import com.colligendis.server.parser.ParsingStatus;
 import com.colligendis.server.parser.numista.exception.ParserException;
-import com.colligendis.server.util.Either;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -74,32 +71,35 @@ public class NumistaPage {
 		return Mono.defer(() -> {
 			return nTypeService.findByNid(nid, pipelineStepLogger)
 					.flatMap(executionResult -> {
-						if (executionResult.getStatus().equals(FindExecutionStatus.FOUND)) {
-							this.nType = executionResult.getNode();
-							return Mono.just(this);
-						} else if (executionResult.getStatus().equals(FindExecutionStatus.NOT_FOUND)) {
-							pipelineStepLogger.warning("NType: (nid: {}) was creating", nid);
-							return nTypeService.create(new NType(nid), getNumistaParserUserMono(), pipelineStepLogger)
-									.flatMap(createdExecutionResult -> {
-										if (createdExecutionResult.getStatus()
-												.equals(CreateNodeExecutionStatus.WAS_CREATED)) {
-											this.nType = createdExecutionResult.getNode();
-											pipelineStepLogger.info("NType created successfully with nid: {}", nid);
-											return Mono.just(this);
-										} else {
-											pipelineStepLogger.error("Failed to create NType with nid: {}", nid);
-											createdExecutionResult.logError(pipelineStepLogger);
-											return Mono.error(new ParserException(
-													"Failed to create NType with nid: " + nid + " - "
-															+ createdExecutionResult.getStatus()));
-										}
-									});
-						} else {
-							pipelineStepLogger.error("Failed to load NType with nid: {}", nid);
-							executionResult.logError(pipelineStepLogger);
-							return Mono.error(new ParserException(
-									"Failed to load NType with nid: " + nid + " - " + executionResult.getStatus()));
+						switch (executionResult.getStatus()) {
+							case FOUND:
+								this.nType = executionResult.getNode();
+								return Mono.just(this);
+							case NOT_FOUND:
+								return nTypeService
+										.create(new NType(nid), getNumistaParserUserMono(), pipelineStepLogger)
+										.flatMap(createdExecutionResult -> {
+											switch (createdExecutionResult.getStatus()) {
+												case WAS_CREATED:
+													this.nType = createdExecutionResult.getNode();
+													pipelineStepLogger.warning("NType: (nid: {}) was created", nid);
+													return Mono.just(this);
+												default:
+													pipelineStepLogger.error("Failed to create NType with nid: {}",
+															nid);
+													createdExecutionResult.logError(pipelineStepLogger);
+													return Mono.error(new ParserException(
+															"Failed to create NType with nid: " + nid + " - "
+																	+ createdExecutionResult.getStatus()));
+											}
+										});
+							default:
+								pipelineStepLogger.error("Failed to load NType with nid: {}", nid);
+								executionResult.logError(pipelineStepLogger);
+								return Mono.error(new ParserException(
+										"Failed to load NType with nid: " + nid + " - " + executionResult.getStatus()));
 						}
+
 					});
 		});
 	}
@@ -109,6 +109,7 @@ public class NumistaPage {
 			if (nType == null) {
 				return Mono.error(new ParserException("NType is null while saving NType with nid: " + nid));
 			}
+			nType.setParsingDate(java.time.LocalDate.now().toString());
 			return nTypeService.update(nType, getNumistaParserUserMono(), pipelineStepLogger)
 					.flatMap(updatedExecutionResult -> {
 						if (updatedExecutionResult.getStatus().equals(UpdateExecutionStatus.WAS_UPDATED)) {

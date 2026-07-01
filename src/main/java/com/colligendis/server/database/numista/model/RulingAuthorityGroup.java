@@ -1,6 +1,7 @@
 package com.colligendis.server.database.numista.model;
 
 import com.colligendis.server.database.AbstractNode;
+import com.colligendis.server.util.UnicodeNormalizer;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -14,7 +15,7 @@ import lombok.NoArgsConstructor;
  * "https://en.numista.com/help/add-or-modify-a-ruling-authority-in-the-catalogue-192.html">Numista</a>
  */
 @Data
-@EqualsAndHashCode(callSuper = false)
+@EqualsAndHashCode(callSuper = true)
 @AllArgsConstructor
 @NoArgsConstructor
 public class RulingAuthorityGroup extends AbstractNode {
@@ -23,5 +24,18 @@ public class RulingAuthorityGroup extends AbstractNode {
 
 	private String nid;
 	private String name;
+
+	private String normalizedName;
+
+	public RulingAuthorityGroup(String nid, String name) {
+		this.nid = nid;
+		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
+	}
+
+	public void setName(String name) {
+		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
+	}
 
 }

@@ -6,6 +6,8 @@ import java.util.Arrays;
 import java.util.List;
 
 import com.colligendis.server.database.AbstractNode;
+import com.colligendis.server.util.UnicodeNormalizer;
+
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -55,7 +57,7 @@ import lombok.NoArgsConstructor;
  * Information takes from https://en.numista.com/help/add-or-modify-a-ruling-authority-in-the-catalogue-192.html
  */
 @Data
-@EqualsAndHashCode(callSuper = false)
+@EqualsAndHashCode(callSuper = true, exclude = { "issuer", "rulingAuthorityGroup", "rulesFromYears", "rulesTillYears" })
 @NoArgsConstructor
 public class RulingAuthority extends AbstractNode {
 	public static final String LABEL = "RULING_AUTHORITY";
@@ -70,6 +72,7 @@ public class RulingAuthority extends AbstractNode {
 
 	private String nid;
 	private String name;
+	private String normalizedName;
 	private String rulerType;
 
 	public static final String RULES_WHEN_BEEN = "RULES_WHEN_BEEN";
@@ -100,6 +103,12 @@ public class RulingAuthority extends AbstractNode {
 	public RulingAuthority(String nid, String name) {
 		this.nid = nid;
 		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
+	}
+
+	public void setName(String name) {
+		this.name = name;
+		this.normalizedName = UnicodeNormalizer.normalize(name);
 	}
 
 }

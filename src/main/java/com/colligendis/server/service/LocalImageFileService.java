@@ -27,12 +27,16 @@ public class LocalImageFileService {
 
 	private static final String DEFAULT_NTYPE_IMAGES_ROOT = "/Users/kirillbobryakov/Coins/Numista/storage/images/ntypes";
 	private static final String DEFAULT_SIGNATURES_ROOT = "/Users/kirillbobryakov/Coins/Numista/storage/signatures";
+	private static final String DEFAULT_MARKS_ROOT = "/Users/kirillbobryakov/Coins/Numista/storage/marks";
 
 	@Value("${numista.images.ntypes.storage-root:" + DEFAULT_NTYPE_IMAGES_ROOT + "}")
 	private String ntypeImagesStorageRoot;
 
 	@Value("${numista.images.signatures.storage-root:" + DEFAULT_SIGNATURES_ROOT + "}")
 	private String signaturesStorageRoot;
+
+	@Value("${numista.images.marks.storage-root:" + DEFAULT_MARKS_ROOT + "}")
+	private String marksStorageRoot;
 
 	public Path resolveAllowedFile(String rawPath, ImageSize size) {
 		final Path mainPath = resolveAllowedMainFile(rawPath);
@@ -76,6 +80,9 @@ public class LocalImageFileService {
 		}
 		if (name.endsWith(".webp")) {
 			return MediaType.parseMediaType("image/webp");
+		}
+		if (name.endsWith(".svg")) {
+			return MediaType.parseMediaType("image/svg+xml");
 		}
 		return MediaType.APPLICATION_OCTET_STREAM;
 	}
@@ -142,6 +149,7 @@ public class LocalImageFileService {
 	private List<Path> allowedRoots() {
 		return List.of(
 				Paths.get(ntypeImagesStorageRoot),
-				Paths.get(signaturesStorageRoot));
+				Paths.get(signaturesStorageRoot),
+				Paths.get(marksStorageRoot));
 	}
 }

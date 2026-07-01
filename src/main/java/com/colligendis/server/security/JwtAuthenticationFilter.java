@@ -20,38 +20,45 @@ import java.util.ArrayList;
 @RequiredArgsConstructor
 public class JwtAuthenticationFilter implements WebFilter {
 
-    private final JwtTokenProvider jwtTokenProvider;
+	private final JwtTokenProvider jwtTokenProvider;
+	private final AuthCookieHelper authCookieHelper;
 
-    @Override
-    public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
-        String token = extractTokenFromRequest(exchange.getRequest());
-        
-        if (StringUtils.hasText(token) && jwtTokenProvider.validateToken(token)) {
-            log.debug("Valid JWT token found, authenticating user");
-            String username = jwtTokenProvider.getUsernameFromToken(token);
-            
-            UsernamePasswordAuthenticationToken authentication =
-                    new UsernamePasswordAuthenticationToken(username, null, new ArrayList<>());
-            
-            log.debug("User {} authenticated successfully", username);
-            
-            return chain.filter(exchange)
-                    .contextWrite(ReactiveSecurityContextHolder.withAuthentication(authentication));
-        }
-        
-        log.debug("No valid JWT token found, proceeding without authentication");
-        return chain.filter(exchange);
-    }
+	@Override
+	public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
+		String token = extractTokenFromRequest(exchange.getRequest());
 
-    private String extractTokenFromRequest(ServerHttpRequest request) {
-        String bearerToken = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
-        
-        if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
-            String token = bearerToken.substring(7);
-            log.debug("Extracted JWT token from Authorization header");
-            return token;
-        }
-        
-        return null;
-    }
+		if (StringUtils.hasText(token) && jwtTokenProvider.validateToken(token)) {
+			log.debug("Valid JWT token found, authenticating user");
+			String username = jwtTokenProvider.getUsernameFromToken(token);
+
+			UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(username, null,
+					new ArrayList<>());
+
+			log.debug("User {} authenticated successfully", username);
+
+			return chain.filter(exchange)
+					.contextWrite(ReactiveSecurityContextHolder.withAuthentication(authentication));
+		}
+
+		// log.debug("No valid JWT token found, proceeding without authentication");
+		return chain.filter(exchange);
+	}
+
+	private String extractTokenFromRequest(ServerHttpRequest request) {
+		String bearerToken = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
+
+		if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
+			String token = bearerToken.substring(7);
+			log.debug("Extracted JWT token from Authorization header");
+			return token;
+		}
+
+		String cookieToken = authCookieHelper.getAccessTokenFromRequest(request);
+		if (StringUtils.hasText(cookieToken)) {
+			log.debug("Extracted JWT token from access cookie");
+			return cookieToken;
+		}
+
+		return null;
+	}
 }

@@ -3,11 +3,13 @@ package com.colligendis.server.parser.numista;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.function.Supplier;
 
 import org.apache.commons.lang3.StringUtils;
 import org.jsoup.nodes.Element;
 import org.springframework.stereotype.Component;
 
+import com.colligendis.server.database.numista.model.Mint;
 import com.colligendis.server.database.numista.model.Mintmark;
 import com.colligendis.server.database.numista.model.SpecifiedMint;
 import com.colligendis.server.database.numista.service.MintService;
@@ -19,6 +21,7 @@ import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
 import com.colligendis.server.database.result.ExecutionResult;
 import com.colligendis.server.database.result.ExecutionStatuses;
 import com.colligendis.server.database.result.FindExecutionStatus;
+import com.colligendis.server.parser.PauseLock;
 import com.colligendis.server.parser.numista.exception.ParserException;
 
 import lombok.RequiredArgsConstructor;
@@ -32,6 +35,7 @@ public class MintParser extends Parser {
 	private final MintmarkService mintmarkService;
 	private final SpecifiedMintService specifiedMintService;
 	private final NTypeService nTypeService;
+	private static final PauseLock PAUSE_LOCK = new PauseLock("MintParserSpecifiedMint");
 
 	@Override
 	protected Mono<NumistaPage> parse(NumistaPage numistaPage) {
@@ -96,16 +100,8 @@ public class MintParser extends Parser {
 					final String rowIdentifier = rawRowId != null ? rawRowId : "";
 
 					HashMap<String, String> mintmarkOption = selectedOrFirstOption(mintmarkSelect);
-					Mono<ExecutionResult<SpecifiedMint, ? extends ExecutionStatuses>> specifiedMono = isValueAndTextNonBlank(
-							mintmarkOption)
-									? loadOrCreateMintmark(mintmarkOption, numistaPage).flatMap(
-											mm -> specifiedMintService.findOrCreateWithMintLinks(rowIdentifier,
-													mintEr.getNode(), mm, numistaPage.getNumistaParserUserMono(),
-													numistaPage.getPipelineStepLogger()))
-									: specifiedMintService.findOrCreateWithMintLinks(rowIdentifier, mintEr.getNode(),
-											null,
-											numistaPage.getNumistaParserUserMono(),
-											numistaPage.getPipelineStepLogger());
+					Mono<ExecutionResult<SpecifiedMint, ? extends ExecutionStatuses>> specifiedMono = findOrCreateSpecifiedMintExclusive(
+							rowIdentifier, mintEr.getNode(), mintmarkOption, numistaPage);
 
 					return specifiedMono.flatMap(smResult -> {
 						if (!smResult.getStatus().equals(FindExecutionStatus.FOUND)
@@ -121,6 +117,26 @@ public class MintParser extends Parser {
 						});
 					});
 				});
+	}
+
+	private Mono<ExecutionResult<SpecifiedMint, ? extends ExecutionStatuses>> findOrCreateSpecifiedMintExclusive(
+			String rowIdentifier, Mint mint,
+			HashMap<String, String> mintmarkOption, NumistaPage numistaPage) {
+		Supplier<Mono<ExecutionResult<SpecifiedMint, ? extends ExecutionStatuses>>> work = () -> findOrCreateSpecifiedMint(
+				rowIdentifier, mint, mintmarkOption, numistaPage);
+		return PAUSE_LOCK.runExclusiveOrElse(work, work);
+	}
+
+	private Mono<ExecutionResult<SpecifiedMint, ? extends ExecutionStatuses>> findOrCreateSpecifiedMint(
+			String rowIdentifier, Mint mint,
+			HashMap<String, String> mintmarkOption, NumistaPage numistaPage) {
+		if (isValueAndTextNonBlank(mintmarkOption)) {
+			return loadOrCreateMintmark(mintmarkOption, numistaPage).flatMap(
+					mm -> specifiedMintService.findOrCreateWithMintLinks(rowIdentifier, mint, mm,
+							numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger()));
+		}
+		return specifiedMintService.findOrCreateWithMintLinks(rowIdentifier, mint, null,
+				numistaPage.getNumistaParserUserMono(), numistaPage.getPipelineStepLogger());
 	}
 
 	private Mono<Mintmark> loadOrCreateMintmark(HashMap<String, String> mintmarkOption, NumistaPage numistaPage) {

@@ -6,33 +6,62 @@ import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 
 import org.jsoup.nodes.Document;
+import org.springframework.util.StringUtils;
 
-import com.colligendis.server.parser.numista.NumistaParseUtils;
+import com.colligendis.server.util.web.WebPageClient;
 
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 public abstract class AbstractPageParser {
 
-    public String url;
+	protected final WebPageClient webPageClient;
 
-    public ParsingStatus currentParsingStatus = ParsingStatus.NOT_CHANGED;
-    public Document page;
-    protected Boolean showPageAfterLoad = false;
+	public String url;
 
-    public abstract Consumer<Stream<String>> parse();
+	/** Optional {@code Cookie} header value; when blank, no cookie is sent. */
+	public String cookie;
 
-    public UnaryOperator<AbstractPageParser> loadPage = pageParser -> {
+	public ParsingStatus currentParsingStatus = ParsingStatus.NOT_CHANGED;
+	public Document page;
+	protected Boolean showPageAfterLoad = false;
 
-        pageParser.page = NumistaParseUtils.loadPageByURL(pageParser.url);
+	protected AbstractPageParser(WebPageClient webPageClient) {
+		this.webPageClient = webPageClient;
+	}
 
-        if (pageParser.page == null) {
-            log.error("Error loading page by URL: {}: {}", pageParser.url, "Page is null");
-            return null;
-        }
-        return pageParser;
-    };
+	public abstract Consumer<Stream<String>> parse();
 
-    public abstract Predicate<AbstractPageParser> isPageLoaded();
+	public UnaryOperator<AbstractPageParser> loadPage() {
+		return this::loadPageIntoParser;
+	}
+
+	protected AbstractPageParser loadPageIntoParser(AbstractPageParser pageParser) {
+		if (!StringUtils.hasText(pageParser.url)) {
+			log.error("Cannot load page: URL is empty");
+			return null;
+		}
+
+		String cookieHeader = StringUtils.hasText(pageParser.cookie) ? pageParser.cookie.strip() : null;
+
+		Document document = webPageClient
+				.loadPageDocument(pageParser.url, cookieHeader)
+				.block();
+
+		if (document == null) {
+			log.error("Error loading page by URL: {}: page not found or empty response", pageParser.url);
+			return null;
+		}
+
+		pageParser.page = document;
+
+		if (Boolean.TRUE.equals(pageParser.showPageAfterLoad)) {
+			log.debug("Loaded page {} (title={})", pageParser.url, document.title());
+		}
+
+		return pageParser;
+	}
+
+	public abstract Predicate<AbstractPageParser> isPageLoaded();
 
 }

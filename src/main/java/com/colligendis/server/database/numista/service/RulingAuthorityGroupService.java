@@ -11,6 +11,7 @@ import com.colligendis.server.database.result.ExecutionStatuses;
 import com.colligendis.server.database.result.FindExecutionStatus;
 import com.colligendis.server.database.result.UpdateExecutionStatus;
 import com.colligendis.server.logger.BaseLogger;
+import com.colligendis.server.util.UnicodeNormalizer;
 
 import reactor.core.publisher.Mono;
 
@@ -35,7 +36,9 @@ public class RulingAuthorityGroupService extends AbstractService {
 
 	public Mono<ExecutionResult<RulingAuthorityGroup, FindExecutionStatus>> findByName(String name,
 			BaseLogger baseLogger) {
-		return super.findNodeByUniquePropertyValue("name", name, RulingAuthorityGroup.LABEL, RulingAuthorityGroup.class,
+		return super.findNodeByUniquePropertyValue("normalizedName", UnicodeNormalizer.normalize(name),
+				RulingAuthorityGroup.LABEL,
+				RulingAuthorityGroup.class,
 				baseLogger);
 	}
 

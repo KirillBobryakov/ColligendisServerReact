@@ -10,6 +10,7 @@ import com.colligendis.server.database.result.CreateNodeExecutionStatus;
 import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
 import com.colligendis.server.database.result.ExecutionResult;
 import com.colligendis.server.database.result.FindExecutionStatus;
+import com.colligendis.server.database.result.UpdateExecutionStatus;
 import com.colligendis.server.logger.BaseLogger;
 
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +25,13 @@ public class CollectibleTypeService extends AbstractService {
 		return colligendisUserMono
 				.flatMap(colligendisUser -> super.createNode(collectibleType, colligendisUser, CollectibleType.class,
 						baseLogger));
+	}
+
+	public Mono<ExecutionResult<CollectibleType, UpdateExecutionStatus>> update(CollectibleType collectibleType,
+			Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
+		return colligendisUserMono
+				.flatMap(colligendisUser -> super.updateNodeProperties(collectibleType, colligendisUser,
+						CollectibleType.class, baseLogger));
 	}
 
 	public Mono<ExecutionResult<CollectibleType, FindExecutionStatus>> findByUuid(String uuid, BaseLogger baseLogger) {

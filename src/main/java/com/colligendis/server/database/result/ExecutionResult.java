@@ -19,6 +19,11 @@ public class ExecutionResult<T extends AbstractNode, S extends ExecutionStatuses
 		return new Builder<>();
 	}
 
+	/** Avoids {@link ClassCastException} when the runtime status type differs from {@code S}. */
+	public ExecutionStatuses statusEnum() {
+		return status;
+	}
+
 	public void logError(BaseLogger baseLogger) {
 		if (error != null) {
 			baseLogger.traceRed("Source Method: {}", error.sourceMethod());

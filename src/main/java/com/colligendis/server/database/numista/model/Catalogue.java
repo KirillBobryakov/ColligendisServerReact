@@ -1,8 +1,10 @@
 package com.colligendis.server.database.numista.model;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import com.colligendis.server.database.AbstractNode;
+import com.colligendis.server.util.UnicodeNormalizer;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -10,7 +12,7 @@ import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 
 @Data
-@EqualsAndHashCode(callSuper = true)
+@EqualsAndHashCode(callSuper = true, exclude = { "authors" })
 @NoArgsConstructor
 @AllArgsConstructor
 public class Catalogue extends AbstractNode {
@@ -29,16 +31,22 @@ public class Catalogue extends AbstractNode {
 	private String number; // catalogue number like L101607
 
 	private String title;
-	private String title_en;
+	private String normalizedTitle;
+	private String titleEn;
 
 	public static final String WRITTEN_BY = "WRITTEN_BY";
-	private List<Author> authors;
+	private List<Author> authors = new ArrayList<>();
 
 	private String bibliography;
 
 	public Catalogue(String code, String number) {
 		this.code = code;
 		this.number = number;
+	}
+
+	public void setTitle(String title) {
+		this.title = title;
+		this.normalizedTitle = UnicodeNormalizer.normalize(title);
 	}
 
 	// private String code;

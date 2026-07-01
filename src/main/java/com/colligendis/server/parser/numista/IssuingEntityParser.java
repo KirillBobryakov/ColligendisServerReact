@@ -16,9 +16,12 @@ import com.colligendis.server.database.numista.service.IssuingEntityService;
 import com.colligendis.server.database.numista.service.NTypeService;
 import com.colligendis.server.database.result.CreateNodeExecutionStatus;
 import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
+import com.colligendis.server.database.result.ExecutionResult;
 import com.colligendis.server.database.result.FindExecutionStatus;
 import com.colligendis.server.parser.PauseLock;
 import com.colligendis.server.parser.numista.exception.ParserException;
+import com.colligendis.server.util.web.WebPageClient;
+import com.colligendis.server.util.web.WebPageLoadException;
 
 import lombok.RequiredArgsConstructor;
 import reactor.core.publisher.Flux;
@@ -36,6 +39,7 @@ public class IssuingEntityParser extends Parser {
 	// Cached services - lazily initialized
 	private final IssuingEntityService issuingEntityService;
 	private final NTypeService nTypeService;
+	private final WebPageClient webPageClient;
 
 	@Override
 	protected Mono<NumistaPage> parse(NumistaPage numistaPage) {
@@ -87,7 +91,7 @@ public class IssuingEntityParser extends Parser {
 	}
 
 	private Mono<IssuingEntity> processIssuingEntityCode(String nid, NumistaPage numistaPage) {
-		return PAUSE_LOCK.awaitIfPaused()
+		return PAUSE_LOCK.awaitIdle()
 				.then(issuingEntityService.findByNid(nid, numistaPage.getPipelineStepLogger()))
 				.flatMap(executionResult -> {
 					switch (executionResult.getStatus()) {
@@ -103,43 +107,29 @@ public class IssuingEntityParser extends Parser {
 	}
 
 	private Mono<IssuingEntity> handleEntityNotFound(String nid, NumistaPage numistaPage) {
+		return PAUSE_LOCK.runExclusiveOrElse(
+				() -> parseIssuingEntitiesByIssuerCodeFromPHPRequestMono(numistaPage.issuer,
+						numistaPage.getNumistaParserUserMono(), numistaPage)
+						.subscribeOn(Schedulers.boundedElastic())
+						.then(issuingEntityService.findByNid(nid, numistaPage.getPipelineStepLogger()))
+						.flatMap(executionResult -> toIssuingEntityOrError(executionResult, nid, numistaPage)),
+				() -> issuingEntityService.findByNid(nid, numistaPage.getPipelineStepLogger())
+						.flatMap(executionResult -> toIssuingEntityOrError(executionResult, nid, numistaPage)));
+	}
 
-		boolean acquiredLock = PAUSE_LOCK.pause();
-
-		if (!acquiredLock) {
-			// Another thread is already loading - wait and retry
-			return PAUSE_LOCK.awaitIfPaused()
-					.then(issuingEntityService.findByNid(nid, numistaPage.getPipelineStepLogger()))
-					.flatMap(executionResult -> {
-						switch (executionResult.getStatus()) {
-							case FOUND:
-								return Mono.just(executionResult.getNode());
-							default:
-								numistaPage.getPipelineStepLogger().error("Failed to find IssuingEntity: {}",
-										executionResult.getStatus());
-								executionResult.logError(numistaPage.getPipelineStepLogger());
-								return Mono.error(new ParserException("Failed to find IssuingEntity: " + nid));
-						}
-					});
+	private Mono<IssuingEntity> toIssuingEntityOrError(
+			ExecutionResult<IssuingEntity, FindExecutionStatus> executionResult,
+			String nid,
+			NumistaPage numistaPage) {
+		switch (executionResult.getStatus()) {
+			case FOUND:
+				return Mono.just(executionResult.getNode());
+			default:
+				numistaPage.getPipelineStepLogger().error("Failed to find IssuingEntity: {}",
+						executionResult.getStatus());
+				executionResult.logError(numistaPage.getPipelineStepLogger());
+				return Mono.error(new ParserException("Failed to find IssuingEntity: " + nid));
 		}
-
-		// This thread acquired the lock - load entities
-		return parseIssuingEntitiesByIssuerCodeFromPHPRequestMono(numistaPage.issuer,
-				numistaPage.getNumistaParserUserMono(), numistaPage)
-				.subscribeOn(Schedulers.boundedElastic())
-				.doFinally(signal -> PAUSE_LOCK.resume())
-				.then(issuingEntityService.findByNid(nid, numistaPage.getPipelineStepLogger()))
-				.flatMap(executionResult -> {
-					switch (executionResult.getStatus()) {
-						case FOUND:
-							return Mono.just(executionResult.getNode());
-						default:
-							numistaPage.getPipelineStepLogger().error("Failed to find IssuingEntity: {}",
-									executionResult.getStatus());
-							executionResult.logError(numistaPage.getPipelineStepLogger());
-							return Mono.error(new ParserException("Failed to find IssuingEntity: " + nid));
-					}
-				});
 	}
 
 	private Mono<Void> linkEntitiesToNType(List<IssuingEntity> entities,
@@ -153,34 +143,6 @@ public class IssuingEntityParser extends Parser {
 				entities,
 				numistaPage.getNumistaParserUserMono(),
 				numistaPage.getPipelineStepLogger())
-				// .flatMap(executionResult -> {
-
-				// if
-				// (executionResult.getStatus().equals(ExecutionStatuses.RELATIONSHIP_IS_EXISTS))
-				// {
-				// numistaPage.getPipelineStepLogger()
-				// .info("IssuingEntities: {}",
-				// entities.stream().map(IssuingEntity::getName).collect(Collectors.joining(",")));
-				// return Mono.just(numistaPage);
-				// }
-				// if
-				// (!executionResult.getStatus().equals(ExecutionStatuses.RELATIONSHIP_WAS_CREATED))
-				// {
-				// numistaPage.getPipelineStepLogger()
-				// .error("IssuingEntities error while linking to NType for nid: {} and issuing
-				// entities names: {} - Error: {}",
-				// numistaPage.nid, entities.stream().map(IssuingEntity::getName)
-				// .collect(Collectors.joining(",")),
-				// executionResult.getStatus());
-				// return Mono.<ExecutionStatuses>error(new ParserException(
-				// "Failed to link issuing entities to NType: " + numistaPage.nid));
-				// }
-				// numistaPage.getPipelineStepLogger()
-				// .warning("IssuingEntities: set to {}",
-				// numistaPage.nid, entities.stream().map(IssuingEntity::getName)
-				// .collect(Collectors.joining(",")));
-				// return Mono.just(numistaPage);
-				// })
 				.then();
 	}
 
@@ -189,13 +151,9 @@ public class IssuingEntityParser extends Parser {
 
 		String url = ISSUING_ENTITIES_URL_PREFIX + issuer.getNumistaCode();
 
-		return Mono.fromCallable(() -> NumistaParseUtils.loadPageByURL(url))
-				.subscribeOn(Schedulers.boundedElastic())
+		return loadHtmlPage(url, numistaPage)
+				.switchIfEmpty(Mono.error(new RuntimeException("Can't load PHP IssuingEntities from URL: " + url)))
 				.flatMap(document -> {
-					if (document == null) {
-						return Mono.error(new RuntimeException("Can't load PHP IssuingEntities from URL: " + url));
-					}
-
 					if (!document.select("optgroup").isEmpty()) {
 						numistaPage.getPipelineStepLogger()
 								.error("Found OPTGROUP in IssuingEntities for issuer: {}",
@@ -235,6 +193,25 @@ public class IssuingEntityParser extends Parser {
 					return Mono.just(true);
 				})
 				.thenReturn(true);
+	}
+
+	private Mono<Document> loadHtmlPage(String url, NumistaPage numistaPage) {
+		return numistaPage.getNumistaParserUserMono()
+				.map(IssuingEntityParser::resolveCookie)
+				.defaultIfEmpty("")
+				.flatMap(cookie -> webPageClient.loadPageDocument(url, cookie))
+				.onErrorResume(WebPageLoadException.class, e -> {
+					numistaPage.getPipelineStepLogger().error("IssuingEntityParser: can't load {}: {}", url,
+							e.getMessage());
+					return Mono.empty();
+				});
+	}
+
+	private static String resolveCookie(ColligendisUser user) {
+		if (user != null && user.getNumistaCookie() != null && !user.getNumistaCookie().isBlank()) {
+			return user.getNumistaCookie().strip();
+		}
+		return "";
 	}
 
 	private Mono<IssuingEntity> processOption(Element option, Issuer issuer,
