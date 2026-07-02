@@ -24,6 +24,10 @@ import org.jsoup.select.Elements;
 import org.springframework.stereotype.Component;
 
 import com.colligendis.server.database.ColligendisUser;
+import com.colligendis.server.database.common.model.Calendar;
+import com.colligendis.server.database.common.model.Year;
+import com.colligendis.server.database.common.service.CalendarService;
+import com.colligendis.server.database.common.service.YearService;
 import com.colligendis.server.database.numista.model.Catalogue;
 import com.colligendis.server.database.numista.model.CatalogueReference;
 import com.colligendis.server.database.numista.model.Issuer;
@@ -43,6 +47,7 @@ import com.colligendis.server.database.result.CreateRelationshipExecutionStatus;
 import com.colligendis.server.database.result.ExecutionResult;
 import com.colligendis.server.database.result.FindExecutionStatus;
 import com.colligendis.server.database.result.UpdateExecutionStatus;
+import com.colligendis.server.logger.BaseLogger;
 import com.colligendis.server.parser.PauseLock;
 import com.colligendis.server.parser.numista.exception.ParserException;
 import com.colligendis.server.util.web.WebPageClient;
@@ -78,6 +83,8 @@ public class VariantsParser extends Parser {
 	private final CatalogueReferenceService catalogueReferenceService;
 	private final SignatureService signatureService;
 	private final IssuingEntityService issuingEntityService;
+	private final CalendarService calendarService;
+	private final YearService yearService;
 	private final WebPageClient webPageClient;
 
 	@Override
@@ -199,6 +206,7 @@ public class VariantsParser extends Parser {
 							return Mono.error(new ParserException("Failed to update Variant: " + er.getStatus()));
 					}
 				})
+				.flatMap(updated -> resolveAndLinkCalendarAndYears(updated, rowScope, numistaPage))
 				.flatMap(updated -> resolveAndLinkSignatures(updated, rowScope, numistaPage))
 				.flatMap(updated -> resolveAndLinkMarks(updated, rowScope, numistaPage))
 				.flatMap(updated -> resolveAndLinkCatalogueReferences(updated, rowScope, numistaPage));
@@ -238,14 +246,8 @@ public class VariantsParser extends Parser {
 		boolean dateCheckSelected = isDateCheckSelected(root);
 		variant.setDated(!dateCheckSelected);
 
-		variant.setDateGregorianYear(parseIntFirst(root.select("input[name^=millesime]")));
 		variant.setDateMonth(parseIntFirst(root.select("input[name^=month]")));
 		variant.setDateDay(parseIntFirst(root.select("input[name^=day]")));
-		Element datesRow = root.parent().selectFirst("tr[id^=dates]");
-		if (datesRow != null) {
-			variant.setFromGregorianYear(parseIntFirst(datesRow.select("input[name^=dated]")));
-			variant.setTillGregorianYear(parseIntFirst(datesRow.select("input[name^=datef]")));
-		}
 
 		Integer mintage = parseIntFirst(root.select("td.date_mintage input[name^=tirage]"), null);
 		variant.setMintage(mintage != null ? mintage : 0);
@@ -256,6 +258,125 @@ public class VariantsParser extends Parser {
 		variant.setMintLetter(firstInputValue(root, "input[name^=atelier]"));
 
 		return variant;
+	}
+
+	private Mono<Variant> resolveAndLinkCalendarAndYears(Variant variant, Element rowScope, NumistaPage numistaPage) {
+		Element anneesScope = resolveAnneesScope(rowScope, numistaPage);
+		String calendarCode = parseSelectedCalendarCode(anneesScope);
+		Integer datedAtYear = parseIntFirst(rowScope.select("input[name^=millesime]"));
+		Element datesRow = rowScope.parent().selectFirst("tr[id^=dates]");
+		Integer fromGregorianYear = datesRow != null
+				? parseIntFirst(datesRow.select("input[name^=dated]"))
+				: null;
+		Integer tillGregorianYear = datesRow != null
+				? parseIntFirst(datesRow.select("input[name^=datef]"))
+				: null;
+
+		Mono<ColligendisUser> userMono = numistaPage.getNumistaParserUserMono();
+		BaseLogger logger = numistaPage.getPipelineStepLogger();
+
+		Mono<Calendar> calendarMono = calendarService.findByCode(calendarCode, logger)
+				.flatMap(er -> {
+					if (er.getStatus().equals(FindExecutionStatus.FOUND)) {
+						return Mono.just(er.getNode());
+					}
+					logger.warning("VariantsParser: calendar code {} not in database, using gregorian", calendarCode);
+					return CalendarService.GREGORIAN;
+				});
+
+		return calendarMono
+				.flatMap(calendar -> variantService.setCalendar(variant, calendar, userMono, logger)
+						.flatMap(calendarEr -> {
+							if (!calendarEr.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)
+									&& !calendarEr.getStatus()
+											.equals(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)) {
+								return Mono.error(new ParserException(
+										"Failed to set calendar on Variant: " + calendarEr.getStatus()));
+							}
+							return linkDatedAtYear(variant, datedAtYear, calendar, userMono, logger);
+						}))
+				.flatMap(v -> linkGregorianDatedFromYear(v, fromGregorianYear, userMono, logger))
+				.flatMap(v -> linkGregorianDatedTillYear(v, tillGregorianYear, userMono, logger));
+	}
+
+	private Mono<Variant> linkDatedAtYear(Variant variant, Integer dateYear, Calendar calendar,
+			Mono<ColligendisUser> userMono, BaseLogger logger) {
+		if (dateYear == null) {
+			return variantService.setDatedAt(variant, null, userMono, logger).thenReturn(variant);
+		}
+		return yearService.findYearByDateYearWithCreate(dateYear, Mono.just(calendar), userMono)
+				.flatMap(year -> variantService.setDatedAt(variant, year, userMono, logger)
+						.flatMap(er -> {
+							if (!er.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)
+									&& !er.getStatus()
+											.equals(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)) {
+								return Mono.error(
+										new ParserException("Failed to set DATED_AT on Variant: " + er.getStatus()));
+							}
+							return Mono.just(variant);
+						}));
+	}
+
+	private Mono<Variant> linkGregorianDatedFromYear(Variant variant, Integer gregorianYear,
+			Mono<ColligendisUser> userMono, BaseLogger logger) {
+		if (gregorianYear == null) {
+			return variantService.setDatedFrom(variant, null, userMono, logger).thenReturn(variant);
+		}
+		return yearService.findYearByDateYearWithCreate(gregorianYear, CalendarService.GREGORIAN, userMono)
+				.flatMap(year -> variantService.setDatedFrom(variant, year, userMono, logger)
+						.flatMap(er -> {
+							if (!er.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)
+									&& !er.getStatus()
+											.equals(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)) {
+								return Mono.error(
+										new ParserException("Failed to set DATED_FROM on Variant: " + er.getStatus()));
+							}
+							return Mono.just(variant);
+						}));
+	}
+
+	private Mono<Variant> linkGregorianDatedTillYear(Variant variant, Integer gregorianYear,
+			Mono<ColligendisUser> userMono, BaseLogger logger) {
+		if (gregorianYear == null) {
+			return variantService.setDatedTill(variant, null, userMono, logger).thenReturn(variant);
+		}
+		return yearService.findYearByDateYearWithCreate(gregorianYear, CalendarService.GREGORIAN, userMono)
+				.flatMap(year -> variantService.setDatedTill(variant, year, userMono, logger)
+						.flatMap(er -> {
+							if (!er.getStatus().equals(CreateRelationshipExecutionStatus.WAS_CREATED)
+									&& !er.getStatus()
+											.equals(CreateRelationshipExecutionStatus.IS_ALREADY_EXISTS)) {
+								return Mono.error(
+										new ParserException("Failed to set DATED_TILL on Variant: " + er.getStatus()));
+							}
+							return Mono.just(variant);
+						}));
+	}
+
+	private Element resolveAnneesScope(Element rowScope, NumistaPage numistaPage) {
+		Element annees = rowScope.closest("fieldset#annees");
+		if (annees != null) {
+			return annees;
+		}
+		return resolveAnneesFieldset(numistaPage.page);
+	}
+
+	private static String parseSelectedCalendarCode(Element anneesScope) {
+		if (anneesScope == null) {
+			return Calendar.GREGORIAN_CODE;
+		}
+		Element select = anneesScope.selectFirst("select#calendrier");
+		if (select == null) {
+			return Calendar.GREGORIAN_CODE;
+		}
+		Element selected = select.select("option[selected]").stream().findFirst().orElse(null);
+		if (selected == null) {
+			selected = select.selectFirst("option");
+		}
+		if (selected == null || StringUtils.isBlank(selected.attr("value"))) {
+			return Calendar.GREGORIAN_CODE;
+		}
+		return selected.attr("value").trim();
 	}
 
 	private boolean isDateCheckSelected(Element root) {

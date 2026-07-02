@@ -1,5 +1,6 @@
 package com.colligendis.server.service;
 
+import com.colligendis.server.controller.CatalogueController.CalendarResponse;
 import com.colligendis.server.controller.CatalogueController.CollectibleTypeResponse;
 import com.colligendis.server.controller.CatalogueController.CurrencyResponse;
 import com.colligendis.server.controller.CatalogueController.DenominationResponse;
@@ -11,6 +12,7 @@ import com.colligendis.server.controller.NTypeDetailController.NTypeDetailRespon
 import com.colligendis.server.controller.NTypeDetailController.NTypePartDetailResponse;
 import com.colligendis.server.controller.NTypeDetailController.SignatureDetailResponse;
 import com.colligendis.server.controller.NTypeDetailController.VariantDetailResponse;
+import com.colligendis.server.database.numista.cypher.VariantYearCypher;
 import com.colligendis.server.dto.MarkResponse;
 import com.colligendis.server.util.LocalImageUrls;
 import lombok.RequiredArgsConstructor;
@@ -82,9 +84,12 @@ public class NTypeDetailService {
 			       nid: variant.nid,
 			       mintage: variant.mintage,
 			       dated: variant.dated,
-			       fromGregorianYear: variant.fromGregorianYear,
-			       tillGregorianYear: variant.tillGregorianYear,
-			       dateGregorianYear: variant.dateGregorianYear,
+			       fromGregorianYear: %s,
+			       tillGregorianYear: %s,
+			       dateGregorianYear: %s,
+			       dateYear: %s,
+			       matchUpToGregorianYear: %s,
+			       calendar: %s,
 			       comment: variant.comment,
 			       mintLetter: variant.mintLetter,
 			       catalogueReferences: [(variant)-[:HAS_CATALOGUE_REFERENCES]->(vcr:CATALOGUE_REFERENCE) | {
@@ -175,7 +180,13 @@ public class NTypeDetailService {
 			  printers,
 			  specifiedMints,
 			  variants
-			""";
+			""".formatted(
+			VariantYearCypher.fromGregorianYearFor("variant"),
+			VariantYearCypher.tillGregorianYearFor("variant"),
+			VariantYearCypher.dateGregorianYearFor("variant"),
+			VariantYearCypher.dateYearFor("variant"),
+			VariantYearCypher.matchUpToGregorianYearFor("variant"),
+			VariantYearCypher.calendarFor("variant"));
 
 	private final Driver driver;
 
@@ -279,6 +290,9 @@ public class NTypeDetailService {
 					integerFromMap(map, "fromGregorianYear"),
 					integerFromMap(map, "tillGregorianYear"),
 					integerFromMap(map, "dateGregorianYear"),
+					integerFromMap(map, "dateYear"),
+					integerFromMap(map, "matchUpToGregorianYear"),
+					calendarFromMap(map, "calendar"),
 					stringFromMap(map, "comment"),
 					stringFromMap(map, "mintLetter"),
 					catalogueReferencesFromMap(map, "catalogueReferences"),
@@ -404,6 +418,19 @@ public class NTypeDetailService {
 			return "";
 		}
 		return record.get(key).asString("");
+	}
+
+	private static CalendarResponse calendarFromMap(Map<String, Object> map, String key) {
+		Object value = map.get(key);
+		if (!(value instanceof Map<?, ?> calendarMap)) {
+			return null;
+		}
+		final String code = calendarMap.get("code") == null ? "" : calendarMap.get("code").toString().trim();
+		final String name = calendarMap.get("name") == null ? "" : calendarMap.get("name").toString().trim();
+		if (code.isEmpty() && name.isEmpty()) {
+			return null;
+		}
+		return new CalendarResponse(code, name);
 	}
 
 	private static Integer integerFromMap(Map<String, Object> map, String key) {

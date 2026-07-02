@@ -34,7 +34,7 @@ class YearPeriodParserServiceTest {
 	@BeforeEach
 	void setUp() {
 		parserService = new YearPeriodParserService(yearService, colligendisUserService);
-		when(yearService.findYearByValueWithCreate(any(Integer.class), any(), any()))
+		when(yearService.findYearByDateYearWithCreate(any(Integer.class), any(), any()))
 				.thenAnswer(invocation -> Mono.just(new Year(invocation.getArgument(0))));
 	}
 
@@ -93,7 +93,7 @@ class YearPeriodParserServiceTest {
 				.assertNext(periods -> {
 					assertThat(periods.periods()).hasSize(1);
 					assertThat(periods.periods().get(0).from()).isPresent();
-					assertThat(periods.periods().get(0).from().get().getValue()).isEqualTo(1990);
+					assertThat(periods.periods().get(0).from().get().getDateYear()).isEqualTo(1990);
 					assertThat(periods.periods().get(0).till()).isEmpty();
 				})
 				.verifyComplete();
@@ -108,15 +108,15 @@ class YearPeriodParserServiceTest {
 
 	private static void assertSingleYearPeriod(CirculationPeriod period, int year) {
 		assertThat(period.from()).isPresent();
-		assertThat(period.from().get().getValue()).isEqualTo(year);
+		assertThat(period.from().get().getDateYear()).isEqualTo(year);
 		assertThat(period.till()).isPresent();
-		assertThat(period.till().get().getValue()).isEqualTo(year);
+		assertThat(period.till().get().getDateYear()).isEqualTo(year);
 	}
 
 	private static void assertRangePeriod(CirculationPeriod period, int from, int till) {
 		assertThat(period.from()).isPresent();
-		assertThat(period.from().get().getValue()).isEqualTo(from);
+		assertThat(period.from().get().getDateYear()).isEqualTo(from);
 		assertThat(period.till()).isPresent();
-		assertThat(period.till().get().getValue()).isEqualTo(till);
+		assertThat(period.till().get().getDateYear()).isEqualTo(till);
 	}
 }

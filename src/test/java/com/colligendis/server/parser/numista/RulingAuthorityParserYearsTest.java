@@ -24,9 +24,9 @@ class RulingAuthorityParserYearsTest {
 
 		RulingAuthorityParser.YearLists yearLists = RulingAuthorityParser.collectYearLists(periods);
 
-		assertThat(yearLists.fromYears()).extracting(Year::getValue)
+		assertThat(yearLists.fromYears()).extracting(Year::getDateYear)
 				.containsExactly(1644, 1655, 1667, 1669);
-		assertThat(yearLists.tillYears()).extracting(Year::getValue)
+		assertThat(yearLists.tillYears()).extracting(Year::getDateYear)
 				.containsExactly(1644, 1655, 1667, 1670);
 	}
 
@@ -38,7 +38,7 @@ class RulingAuthorityParserYearsTest {
 
 		RulingAuthorityParser.YearLists yearLists = RulingAuthorityParser.collectYearLists(periods);
 
-		assertThat(yearLists.fromYears()).extracting(Year::getValue).containsExactly(1936);
-		assertThat(yearLists.tillYears()).extracting(Year::getValue).containsExactly(1936);
+		assertThat(yearLists.fromYears()).extracting(Year::getDateYear).containsExactly(1936);
+		assertThat(yearLists.tillYears()).extracting(Year::getDateYear).containsExactly(1936);
 	}
 }

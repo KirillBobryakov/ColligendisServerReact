@@ -772,7 +772,7 @@ public class NumistaParseUtils {
 				if (StringUtils.isNumeric(years[0])) {
 
 					Mono<Year> yearFromMono = yearService
-							.findGregorianYearByValue(Integer.parseInt(years[0]));
+							.findGregorianYearByDateYear(Integer.parseInt(years[0]));
 
 					yearFrom = yearFromMono.block();
 
@@ -788,7 +788,7 @@ public class NumistaParseUtils {
 				if (StringUtils.isNumeric(years[0])) { // Now I only know that the start year is only number
 
 					Mono<Year> yearFromMono = yearService
-							.findGregorianYearByValue(Integer.parseInt(years[0]));
+							.findGregorianYearByDateYear(Integer.parseInt(years[0]));
 
 					yearFrom = yearFromMono.block();
 
@@ -804,7 +804,7 @@ public class NumistaParseUtils {
 				} else if (StringUtils.isNumeric(years[1])) {
 
 					Mono<Year> yearTillMono = yearService
-							.findGregorianYearByValue(Integer.parseInt(years[1]));
+							.findGregorianYearByDateYear(Integer.parseInt(years[1]));
 
 					yearTill = yearTillMono.block();
 

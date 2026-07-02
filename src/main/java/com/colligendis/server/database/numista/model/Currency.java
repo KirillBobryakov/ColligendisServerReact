@@ -1,6 +1,6 @@
 package com.colligendis.server.database.numista.model;
 
-import java.time.Year;
+import com.colligendis.server.database.common.model.Year;
 import java.util.ArrayList;
 import java.util.List;
 

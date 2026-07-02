@@ -7,6 +7,8 @@ import org.springframework.stereotype.Service;
 import com.colligendis.server.database.AbstractNode;
 import com.colligendis.server.database.AbstractService;
 import com.colligendis.server.database.ColligendisUser;
+import com.colligendis.server.database.common.model.Calendar;
+import com.colligendis.server.database.common.model.Year;
 import com.colligendis.server.database.numista.model.CatalogueReference;
 import com.colligendis.server.database.numista.model.Mark;
 import com.colligendis.server.database.numista.model.Signature;
@@ -66,5 +68,37 @@ public class VariantService extends AbstractService {
 		return colligendisUserMono
 				.flatMap(colligendisUser -> super.createUniqueOutgoingRelationships(variant, catalogueReferences,
 						CatalogueReference.class, Variant.HAS_CATALOGUE_REFERENCES, colligendisUser, baseLogger));
+	}
+
+	public Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> setCalendar(Variant variant,
+			Calendar calendar, Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
+		return colligendisUserMono
+				.flatMap(colligendisUser -> super.createUniqueOutgoingRelationships(variant,
+						calendar != null ? List.of(calendar) : List.of(), Calendar.class, Variant.WITH_CALENDAR,
+						colligendisUser, baseLogger));
+	}
+
+	public Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> setDatedAt(Variant variant,
+			Year year, Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
+		return setSingleYearRelationship(variant, year, Variant.DATED_AT, colligendisUserMono, baseLogger);
+	}
+
+	public Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> setDatedFrom(Variant variant,
+			Year year, Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
+		return setSingleYearRelationship(variant, year, Variant.DATED_FROM, colligendisUserMono, baseLogger);
+	}
+
+	public Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> setDatedTill(Variant variant,
+			Year year, Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
+		return setSingleYearRelationship(variant, year, Variant.DATED_TILL, colligendisUserMono, baseLogger);
+	}
+
+	private Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> setSingleYearRelationship(
+			Variant variant, Year year, String relationshipType, Mono<ColligendisUser> colligendisUserMono,
+			BaseLogger baseLogger) {
+		return colligendisUserMono
+				.flatMap(colligendisUser -> super.createUniqueOutgoingRelationships(variant,
+						year != null ? List.of(year) : List.of(), Year.class, relationshipType, colligendisUser,
+						baseLogger));
 	}
 }

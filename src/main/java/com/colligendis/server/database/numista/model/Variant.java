@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.colligendis.server.database.AbstractNode;
+import com.colligendis.server.database.common.model.Calendar;
+import com.colligendis.server.database.common.model.Year;
 import com.colligendis.server.util.UnicodeNormalizer;
 
 import lombok.Data;
@@ -21,13 +23,18 @@ public class Variant extends AbstractNode {
 
 	private Boolean dated;
 
-	// Gregorian from year
-	private Integer fromGregorianYear;
+	public static final String WITH_CALENDAR = "WITH_CALENDAR";
+	private Calendar calendar;
 
-	// Gregorian till year
-	private Integer tillGregorianYear;
+	public static final String DATED_AT = "DATED_AT";
+	private Year datedAtYear;
 
-	private Integer dateGregorianYear;
+	public static final String DATED_FROM = "DATED_FROM";
+	private Year datedFromYear;
+
+	public static final String DATED_TILL = "DATED_TILL";
+	private Year datedTillYear;
+
 	private Integer dateMonth;
 	private Integer dateDay;
 

@@ -1,5 +1,6 @@
 package com.colligendis.server.controller;
 
+import com.colligendis.server.controller.CatalogueController.CalendarResponse;
 import com.colligendis.server.controller.CatalogueController.CollectibleTypeResponse;
 import com.colligendis.server.controller.CatalogueController.CurrencyResponse;
 import com.colligendis.server.controller.CatalogueController.DenominationResponse;
@@ -45,6 +46,9 @@ public class NTypeDetailController {
 			Integer fromGregorianYear,
 			Integer tillGregorianYear,
 			Integer dateGregorianYear,
+			Integer dateYear,
+			Integer matchUpToGregorianYear,
+			CalendarResponse calendar,
 			String comment,
 			String mintLetter,
 			List<CatalogueReferenceResponse> catalogueReferences,

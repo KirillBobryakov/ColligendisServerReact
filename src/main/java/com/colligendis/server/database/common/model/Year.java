@@ -18,18 +18,18 @@ import lombok.NoArgsConstructor;
 @EqualsAndHashCode(callSuper = false)
 @NoArgsConstructor
 public class Year extends AbstractNode {
-    public static final String LABEL = "YEAR";
+	public static final String LABEL = "YEAR";
 
-    private Integer value;
+	private Integer dateYear;
 
-    public static final String TO_NUMBER_IN = "TO_NUMBER_IN";
-    private Calendar calendar;
+	public static final String TO_NUMBER_IN = "TO_NUMBER_IN";
+	private Calendar calendar;
 
-    public static final String MATCH_UP_TO = "MATCH_UP_TO";
-    private ArrayList<Year> sameYears = new ArrayList<>();
+	public static final String MATCH_UP_TO_GREGORIAN = "MATCH_UP_TO_GREGORIAN";
+	private Year sameGregorianYear;
 
-    public Year(Integer value) {
-        this.value = value;
-    }
+	public Year(Integer dateYear) {
+		this.dateYear = dateYear;
+	}
 
 }

@@ -162,11 +162,16 @@ Versioned / deleted nodes reuse the same graph id with **additional** labels `*_
 
 | Pattern | Constant |
 |---------|----------|
+| `VARIANT` → `CALENDAR` | `WITH_CALENDAR` |
+| `VARIANT` → `YEAR` | `DATED_AT` (mintage year in selected calendar) |
+| `VARIANT` → `YEAR` | `DATED_FROM`, `DATED_TILL` (Gregorian year range only) |
 | `VARIANT` → `SIGNATURE` | `WITH_SIGNATURE` |
 | `VARIANT` → `MARK` | `WITH_MARK` |
 | `VARIANT` → `CATALOGUE_REFERENCE` | `HAS_CATALOGUE_REFERENCES` |
 
-Properties: `mintLetter` (from contribution `atelier` input; mint letter / workshop identifier for the variant row).
+Properties: `mintLetter` (from contribution `atelier` input; mint letter / workshop identifier for the variant row), `dated`, `dateMonth`, `dateDay`, `mintage`, `comment`.
+
+Variant year values are stored on linked `YEAR` nodes, not as integer properties on `VARIANT`. `DATED_AT` points to a year in the calendar selected by `select#calendrier` (`WITH_CALENDAR`). When a non-Gregorian `YEAR` is created for `DATED_AT`, link it to the equivalent Gregorian year via `MATCH_UP_TO_GREGORIAN`. `DATED_FROM` / `DATED_TILL` always reference Gregorian calendar years (from `input[name^=dated]` / `input[name^=datef]`).
 
 ### `NTYPE_PART`
 
@@ -239,7 +244,9 @@ Properties: `mintLetter` (from contribution `atelier` input; mint letter / works
 | Pattern | Constant |
 |---------|----------|
 | `YEAR` → `CALENDAR` | `TO_NUMBER_IN` |
-| `YEAR` → `YEAR` | `MATCH_UP_TO` |
+| `YEAR` → `YEAR` | `MATCH_UP_TO_GREGORIAN` |
+
+`YEAR` nodes store the calendar-specific year in property `dateYear` (not `value`). Non-Gregorian years link to their Gregorian equivalent via `MATCH_UP_TO_GREGORIAN` (Java field `sameGregorian`). Gregorian conversion uses `Calendar.toGregorianShift`: `gregorianDateYear ≈ dateYear + toGregorianShift`.
 
 ### User collection
 

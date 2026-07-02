@@ -49,6 +49,7 @@ public class CatalogueController {
 	@GetMapping("/ntypes")
 	public Mono<CatalogueSearchPageResponse> getCatalogueNtypes(
 			@RequestParam(name = "search", required = false) String search,
+			@RequestParam(name = "nid", required = false) String nid,
 			@RequestParam(name = "countryNumistaCode", required = false) String countryNumistaCode,
 			@RequestParam(name = "issuerNumistaCode", required = false) String issuerNumistaCode,
 			@RequestParam(name = "currencyNid", required = false) String currencyNid,
@@ -65,6 +66,7 @@ public class CatalogueController {
 			@RequestParam(name = "limit", required = false, defaultValue = "200") int limit) {
 		return catalogueNtypesService.search(CatalogueNtypesService.fromQueryParams(
 				search,
+				nid,
 				countryNumistaCode,
 				issuerNumistaCode,
 				currencyNid,
@@ -99,6 +101,9 @@ public class CatalogueController {
 	public record CollectibleTypeResponse(String code, String name) {
 	}
 
+	public record CalendarResponse(String code, String name) {
+	}
+
 	public record VariantResponse(
 			String nid,
 			Integer mintage,
@@ -106,6 +111,9 @@ public class CatalogueController {
 			Integer fromGregorianYear,
 			Integer tillGregorianYear,
 			Integer dateGregorianYear,
+			Integer dateYear,
+			Integer matchUpToGregorianYear,
+			CalendarResponse calendar,
 			String comment,
 			List<MarkResponse> marks) {
 	}

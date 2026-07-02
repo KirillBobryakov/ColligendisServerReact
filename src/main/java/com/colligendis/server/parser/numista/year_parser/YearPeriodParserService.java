@@ -122,7 +122,7 @@ public class YearPeriodParserService {
 
 	private Mono<Year> parseSingleYear(String yearStr) {
 		return Mono.justOrEmpty(parseYearToken(yearStr))
-				.flatMap(year -> yearService.findYearByValueWithCreate(year, CalendarService.GREGORIAN,
+				.flatMap(year -> yearService.findYearByDateYearWithCreate(year, CalendarService.GREGORIAN,
 						colligendisUserService.getNumistaParserUserMono()));
 	}
 
@@ -165,7 +165,7 @@ public class YearPeriodParserService {
 	private Mono<Year> parseYearValue(String str) {
 		return Mono.justOrEmpty(parseYearToken(str))
 				.switchIfEmpty(Mono.error(new IllegalStateException("Year not numeric: " + str)))
-				.flatMap(year -> yearService.findYearByValueWithCreate(year, CalendarService.GREGORIAN,
+				.flatMap(year -> yearService.findYearByDateYearWithCreate(year, CalendarService.GREGORIAN,
 						colligendisUserService.getNumistaParserUserMono()));
 	}
 }

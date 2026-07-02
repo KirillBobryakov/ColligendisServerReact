@@ -22,16 +22,16 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 public class YearService extends AbstractService {
 
-	public Mono<ExecutionResult<Year, FindExecutionStatus>> findByValueAndCalendar(Integer value,
+	public Mono<ExecutionResult<Year, FindExecutionStatus>> findByDateYearAndCalendar(Integer dateYear,
 			Mono<Calendar> calendarMono,
 			BaseLogger baseLogger) {
-		return calendarMono.flatMap(calendar -> super.findUniqueNodeByPropertyValueAndTargetNode("value", value,
+		return calendarMono.flatMap(calendar -> super.findUniqueNodeByPropertyValueAndTargetNode("dateYear", dateYear,
 				Year.LABEL, Year.class, calendar, Year.TO_NUMBER_IN, baseLogger));
 	}
 
 	public Mono<ExecutionResult<Year, CreateNodeExecutionStatus>> create(Year year, Mono<Calendar> calendarMono,
 			Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
-		return findByValueAndCalendar(year.getValue(), calendarMono, baseLogger)
+		return findByDateYearAndCalendar(year.getDateYear(), calendarMono, baseLogger)
 				.flatMap(findExecutionResult -> {
 					switch (findExecutionResult.getStatus()) {
 						case FOUND:
@@ -62,17 +62,24 @@ public class YearService extends AbstractService {
 							.doOnNext(er -> {
 								if (er.getError() != null) {
 									log.error(
-											"YearService.setCalendar: Error while creating connection from Year with value: {} to Calendar with code: {} and name: {}. Error: {}",
-											year.getValue(), calendar.getCode(), calendar.getName(),
+											"YearService.setCalendar: Error while creating connection from Year with dateYear: {} to Calendar with code: {} and name: {}. Error: {}",
+											year.getDateYear(), calendar.getCode(), calendar.getName(),
 											er.getError());
 								}
 							});
 				});
 	}
 
-	public Mono<Year> findGregorianYearByValue(Integer value) {
+	public Mono<ExecutionResult<AbstractNode, CreateRelationshipExecutionStatus>> linkToGregorianYear(Year calendarYear,
+			Year gregorianYear, Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
+		return colligendisUserMono
+				.flatMap(colligendisUser -> super.createSingleRelationship(calendarYear, gregorianYear,
+						Year.MATCH_UP_TO_GREGORIAN, colligendisUser, baseLogger));
+	}
+
+	public Mono<Year> findGregorianYearByDateYear(Integer dateYear) {
 		BaseLogger baseLogger = new BaseLogger();
-		return findByValueAndCalendar(value, CalendarService.GREGORIAN, baseLogger)
+		return findByDateYearAndCalendar(dateYear, CalendarService.GREGORIAN, baseLogger)
 				.flatMap(er -> {
 					if (FindExecutionStatus.FOUND.equals(er.getStatus()) && er.getNode() != null) {
 						return Mono.just(er.getNode());
@@ -81,27 +88,29 @@ public class YearService extends AbstractService {
 				});
 	}
 
-	public Mono<Year> findYearByValueWithCreate(Integer value, Mono<Calendar> calendarMono,
+	public Mono<Year> findYearByDateYearWithCreate(Integer dateYear, Mono<Calendar> calendarMono,
 			Mono<ColligendisUser> colligendisUserMono) {
 		BaseLogger baseLogger = new BaseLogger();
-		return findByValueAndCalendar(value, calendarMono, baseLogger)
+		return calendarMono.flatMap(calendar -> findByDateYearAndCalendar(dateYear, Mono.just(calendar), baseLogger)
 				.flatMap(findEr -> {
 					switch (findEr.getStatus()) {
 						case FOUND:
 							return Mono.just(findEr.getNode());
 						case NOT_FOUND:
-							return create(new Year(value), calendarMono, colligendisUserMono, baseLogger)
+							return create(new Year(dateYear), Mono.just(calendar), colligendisUserMono, baseLogger)
 									.flatMap(createEr -> {
 										switch (createEr.getStatus()) {
 											case WAS_CREATED:
-												return setCalendar(createEr.getNode(), calendarMono,
+												return setCalendar(createEr.getNode(), Mono.just(calendar),
 														colligendisUserMono, baseLogger)
 														.flatMap(setExResult -> {
 															switch (setExResult.getStatus()) {
 																case WAS_CREATED:
 																	baseLogger.trace("Calendar was set: {}",
 																			setExResult.getNode());
-																	return Mono.just(createEr.getNode());
+																	return linkNewYearToGregorianIfNeeded(
+																			createEr.getNode(), dateYear, calendar,
+																			colligendisUserMono, baseLogger);
 																default:
 																	return Mono.empty();
 															}
@@ -115,8 +124,33 @@ public class YearService extends AbstractService {
 							baseLogger.traceRed("Failed to find Year: {}", findEr.getStatus());
 							return Mono.empty();
 					}
-				});
+				}));
+	}
 
+	private Mono<Year> linkNewYearToGregorianIfNeeded(Year calendarYear, Integer dateYear, Calendar calendar,
+			Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
+		if (Calendar.GREGORIAN_CODE.equals(calendar.getCode())) {
+			return Mono.just(calendarYear);
+		}
+		Integer shift = calendar.getToGregorianShift();
+		if (shift == null) {
+			baseLogger.warning(
+					"YearService: skip MATCH_UP_TO_GREGORIAN for dateYear {} in calendar {} — no toGregorianShift",
+					dateYear, calendar.getCode());
+			return Mono.just(calendarYear);
+		}
+		int gregorianDateYear = dateYear + shift;
+		return findYearByDateYearWithCreate(gregorianDateYear, CalendarService.GREGORIAN, colligendisUserMono)
+				.flatMap(gregorianYear -> linkToGregorianYear(calendarYear, gregorianYear, colligendisUserMono,
+						baseLogger)
+						.doOnNext(er -> {
+							if (er.getError() != null) {
+								baseLogger.error(
+										"YearService: failed to link year {} ({}) to Gregorian year {}: {}",
+										dateYear, calendar.getCode(), gregorianDateYear, er.getError());
+							}
+						})
+						.thenReturn(calendarYear));
 	}
 
 }

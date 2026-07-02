@@ -7,6 +7,7 @@ import com.colligendis.server.database.ColligendisUser;
 import com.colligendis.server.database.common.model.Calendar;
 import com.colligendis.server.database.result.CreateNodeExecutionStatus;
 import com.colligendis.server.database.result.ExecutionResult;
+import com.colligendis.server.database.result.ExecutionStatuses;
 import com.colligendis.server.database.result.FindExecutionStatus;
 import com.colligendis.server.logger.BaseLogger;
 
@@ -50,6 +51,25 @@ public class CalendarService extends AbstractService {
 							return Mono.just(executionResult);
 					}
 				});
+	}
+
+	public Mono<ExecutionResult<Calendar, ? extends ExecutionStatuses>> findByCodeOrCreate(String code, String name,
+			Integer toGregorianShift, Mono<ColligendisUser> colligendisUserMono, BaseLogger baseLogger) {
+		return colligendisUserMono.flatMap(colligendisUser -> findByCode(code, baseLogger)
+				.flatMap(executionResult -> {
+					switch (executionResult.getStatus()) {
+						case FOUND:
+							return Mono.just(executionResult);
+						case NOT_FOUND:
+							Calendar calendar = new Calendar(code, name, toGregorianShift);
+							return create(calendar, Mono.just(colligendisUser), baseLogger);
+						default:
+							baseLogger.traceRed("findByCodeOrCreate: unexpected find status: {}",
+									executionResult.getStatus());
+							executionResult.logError(baseLogger);
+							return Mono.just(executionResult);
+					}
+				}));
 	}
 
 	public Mono<ExecutionResult<Calendar, FindExecutionStatus>> findByCode(String code, BaseLogger baseLogger) {

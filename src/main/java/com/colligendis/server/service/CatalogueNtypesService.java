@@ -13,6 +13,7 @@ import org.neo4j.driver.reactivestreams.ReactiveSession;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.colligendis.server.controller.CatalogueController.CalendarResponse;
 import com.colligendis.server.controller.CatalogueController.CatalogueItemResponse;
 import com.colligendis.server.controller.CatalogueController.CatalogueSearchPageResponse;
 import com.colligendis.server.controller.CatalogueController.CollectibleTypeResponse;
@@ -23,6 +24,7 @@ import com.colligendis.server.controller.CountryController.CountryResponse;
 import com.colligendis.server.controller.IssuerController.IssuerResponse;
 import com.colligendis.server.database.ColligendisUser;
 import com.colligendis.server.database.ColligendisUserService;
+import com.colligendis.server.database.numista.cypher.VariantYearCypher;
 import com.colligendis.server.database.numista.model.CollectibleType;
 import com.colligendis.server.database.numista.service.NumistaCollectionItemService;
 import com.colligendis.server.dto.MarkResponse;
@@ -56,6 +58,7 @@ public class CatalogueNtypesService {
 
 	public record CatalogueNtypesSearchRequest(
 			String search,
+			String nid,
 			String countryNumistaCode,
 			String issuerNumistaCode,
 			String currencyNid,
@@ -73,6 +76,11 @@ public class CatalogueNtypesService {
 	}
 
 	public Mono<CatalogueSearchPageResponse> search(CatalogueNtypesSearchRequest request) {
+		final String nid = normalizeNid(request.nid());
+		if (!nid.isBlank()) {
+			return searchByNid(nid, request.offset(), request.limit());
+		}
+
 		final List<String> collectibleTypeCodes = mapTypeNamesToCodes(request.types());
 		final int pageLimit = Math.min(Math.max(request.limit(), 1), MAX_PAGE_SIZE);
 		final int skipRows = Math.max(request.offset(), 0);
@@ -129,6 +137,7 @@ public class CatalogueNtypesService {
 
 	public static CatalogueNtypesSearchRequest fromQueryParams(
 			String search,
+			String nid,
 			String countryNumistaCode,
 			String issuerNumistaCode,
 			String currencyNid,
@@ -146,6 +155,7 @@ public class CatalogueNtypesService {
 		final int resolvedLimit = limit > 0 ? limit : DEFAULT_PAGE_SIZE;
 		return new CatalogueNtypesSearchRequest(
 				search,
+				nid,
 				countryNumistaCode,
 				issuerNumistaCode,
 				currencyNid,
@@ -160,6 +170,19 @@ public class CatalogueNtypesService {
 				myCollectionOnly,
 				offset,
 				resolvedLimit);
+	}
+
+	private Mono<CatalogueSearchPageResponse> searchByNid(String nid, int offset, int limit) {
+		final int pageLimit = Math.min(Math.max(limit, 1), MAX_PAGE_SIZE);
+		final int skipRows = Math.max(offset, 0);
+		final Map<String, Object> params = new HashMap<>();
+		params.put("nid", nid);
+		params.put("skipRows", skipRows);
+		params.put("pageLimit", pageLimit);
+
+		log.info("Request to search catalogue ntypes by nid={}, offset={}, limit={}", nid, skipRows, pageLimit);
+		return runPagedSearch(nidSearchCountCypher(), nidSearchDataCypher(), params)
+				.flatMap(this::enrichWithCollectionItemsWhenAuthenticated);
 	}
 
 	private Mono<CatalogueSearchPageResponse> enrichWithCollectionItemsWhenAuthenticated(
@@ -228,9 +251,12 @@ public class CatalogueNtypesService {
 				    nid: v.nid,
 				    mintage: v.mintage,
 				    dated: v.dated,
-				    fromGregorianYear: v.fromGregorianYear,
-				    tillGregorianYear: v.tillGregorianYear,
-				    dateGregorianYear: v.dateGregorianYear,
+				    fromGregorianYear: %s,
+				    tillGregorianYear: %s,
+				    dateGregorianYear: %s,
+				    dateYear: %s,
+				    matchUpToGregorianYear: %s,
+				    calendar: %s,
 				    comment: v.comment,
 				    marks: [(v)-[:WITH_MARK]->(m:MARK) | {
 				      nid: m.nid,
@@ -240,6 +266,60 @@ public class CatalogueNtypesService {
 				      pictureLocalPath: m.pictureLocalPath
 				    }]
 				  }] AS variants
+				""".formatted(
+				VariantYearCypher.fromGregorianYearFor("v"),
+				VariantYearCypher.tillGregorianYearFor("v"),
+				VariantYearCypher.dateGregorianYearFor("v"),
+				VariantYearCypher.dateYearFor("v"),
+				VariantYearCypher.matchUpToGregorianYearFor("v"),
+				VariantYearCypher.calendarFor("v"));
+	}
+
+	private String nidSearchCountCypher() {
+		return """
+				MATCH (n:NTYPE {nid: $nid})
+				RETURN count(n) AS total
+				""";
+	}
+
+	private String nidSearchDataCypher() {
+		return """
+				MATCH (n:NTYPE {nid: $nid})
+				OPTIONAL MATCH (n)-[:ISSUED_BY]->(issuer:ISSUER)
+				OPTIONAL MATCH (issuer)-[*]->(country:COUNTRY)
+				OPTIONAL MATCH (n)-[:HAS_CURRENCY]->(currency:CURRENCY)
+				OPTIONAL MATCH (n)-[:DENOMINATED_IN]->(denomination:DENOMINATION)
+				OPTIONAL MATCH (n)-[:HAS_COLLECTIBLE_TYPE]->(baseCt:COLLECTIBLE_TYPE)
+				OPTIONAL MATCH (baseCt)<-[:HAS_COLLECTIBLE_TYPE_CHILD*0..]-(ct:COLLECTIBLE_TYPE)
+				WHERE NOT EXISTS {
+				    (ct)<-[:HAS_COLLECTIBLE_TYPE_CHILD]-()
+				}
+				OPTIONAL MATCH (n)-[:HAS_OBVERSE]->(obverse:NTYPE_PART)
+				OPTIONAL MATCH (n)-[:HAS_REVERSE]->(reverse:NTYPE_PART)
+				OPTIONAL MATCH (n)-[:HAS_VARIANT]->(variant:VARIANT)
+				WHERE coalesce(variant.deletedOnNumista, false) = false
+				WITH n, country, issuer, currency, denomination, ct, obverse, reverse,
+				""" + variantsCollectExpression() + """
+				RETURN DISTINCT
+				  n.nid AS nid,
+				  n.title AS title,
+				  country.numistaCode AS countryNumistaCode,
+				  country.name AS countryName,
+				  issuer.numistaCode AS issuerNumistaCode,
+				  issuer.name AS issuerName,
+				  currency.nid AS currencyNid,
+				  currency.name AS currencyName,
+				  currency.fullName AS currencyFullName,
+				  denomination.nid AS denominationNid,
+				  denomination.name AS denominationName,
+				  denomination.numericValue AS denominationNumericValue,
+				  ct.code AS collectibleTypeCode,
+				  ct.name AS collectibleTypeName,
+				  obverse.pictureLocalPath AS frontImageLocalPath,
+				  reverse.pictureLocalPath AS backImageLocalPath,
+				  variants AS variants
+				ORDER BY n.nid
+				SKIP toInteger($skipRows) LIMIT toInteger($pageLimit)
 				""";
 	}
 
@@ -310,24 +390,7 @@ public class CatalogueNtypesService {
 	}
 
 	private String issuerSearchYearFilterClause() {
-		return """
-				AND (
-				  ($startYear IS NULL AND $endYear IS NULL)
-				  OR EXISTS {
-				    MATCH (n)-[:HAS_VARIANT]->(v:VARIANT)
-				    WHERE coalesce(v.deletedOnNumista, false) = false
-				    AND (
-				      (v.dateGregorianYear IS NOT NULL
-				        AND ($startYear IS NULL OR v.dateGregorianYear >= $startYear)
-				        AND ($endYear IS NULL OR v.dateGregorianYear <= $endYear))
-				      OR
-				      (v.fromGregorianYear IS NOT NULL
-				        AND ($endYear IS NULL OR v.fromGregorianYear <= $endYear)
-				        AND ($startYear IS NULL OR v.tillGregorianYear IS NULL OR v.tillGregorianYear >= $startYear))
-				    )
-				  }
-				)
-				""";
+		return VariantYearCypher.issuerSearchYearFilterClause("v");
 	}
 
 	private String issuerSearchCountCypher() {
@@ -503,6 +566,9 @@ public class CatalogueNtypesService {
 					integerFromMap(map, "fromGregorianYear"),
 					integerFromMap(map, "tillGregorianYear"),
 					integerFromMap(map, "dateGregorianYear"),
+					integerFromMap(map, "dateYear"),
+					integerFromMap(map, "matchUpToGregorianYear"),
+					calendarFromMap(map, "calendar"),
 					stringFromMap(map, "comment"),
 					marksFromMap(map, "marks"));
 		}).stream().filter(Objects::nonNull).toList();
@@ -524,6 +590,19 @@ public class CatalogueNtypesService {
 	private static String stringFromMap(Map<String, Object> map, String key) {
 		Object value = map.get(key);
 		return value == null ? "" : value.toString();
+	}
+
+	private static CalendarResponse calendarFromMap(Map<String, Object> map, String key) {
+		Object value = map.get(key);
+		if (!(value instanceof Map<?, ?> calendarMap)) {
+			return null;
+		}
+		final String code = calendarMap.get("code") == null ? "" : calendarMap.get("code").toString().trim();
+		final String name = calendarMap.get("name") == null ? "" : calendarMap.get("name").toString().trim();
+		if (code.isEmpty() && name.isEmpty()) {
+			return null;
+		}
+		return new CalendarResponse(code, name);
 	}
 
 	private static Integer integerFromMap(Map<String, Object> map, String key) {
@@ -587,5 +666,9 @@ public class CatalogueNtypesService {
 
 	private String normalize(String value) {
 		return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+	}
+
+	private String normalizeNid(String value) {
+		return value == null ? "" : value.trim();
 	}
 }
